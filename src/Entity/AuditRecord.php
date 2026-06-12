@@ -73,6 +73,20 @@ class AuditRecord
         return new self(AuditRecordType::PackageCreated, ['name' => $package->getName(), 'repository' => $package->getRepository(), 'actor' => self::getUserData($actor)], $actor?->getId(), $package->getVendor(), $package->getId());
     }
 
+    public static function organizationCreated(Ulid $organizationId, string $slug, string $displayName, ?User $actor): self
+    {
+        return new self(
+            AuditRecordType::OrganizationCreated,
+            [
+                'organization_id' => (string) $organizationId,
+                'slug' => $slug,
+                'display_name' => $displayName,
+                'actor' => self::getUserData($actor),
+            ],
+            $actor?->getId(),
+        );
+    }
+
     public static function packageDeleted(Package $package, ?User $actor): self
     {
         return new self(AuditRecordType::PackageDeleted, ['name' => $package->getName(), 'repository' => $package->getRepository(), 'actor' => self::getUserData($actor, 'automation')], $actor?->getId(), $package->getVendor(), $package->getId());
