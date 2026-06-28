@@ -29,7 +29,7 @@ class NotReservedWord extends Constraint
         'automation', // used to describe background workers doing things automatically in transparency log
     ];
 
-    public string $message = 'This is a reserved word.';
+    public string $message = '"{{ value }}" is a reserved name and cannot be used.';
 
     public function getTargets(): string
     {

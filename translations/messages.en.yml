@@ -25,6 +25,8 @@ menu:
     my_packages: My packages
     my_organizations: My organizations
     my_favorites: My favorites
+    organization_overview: Overview
+    organization_settings: Settings
 
 signinbox:
      register: No account yet? Create one now!
@@ -206,6 +208,8 @@ audit_log:
         filter_list_entry_added: Entry added
         filter_list_entry_deleted: Entry deleted
         organization_created: Organization created
+        organization_renamed: Organization renamed
+        organization_slug_changed: Organization slug changed
     enums:
         user-registration-method:
             form: 'Registration form'
