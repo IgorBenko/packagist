@@ -89,6 +89,34 @@ class AuditRecord
         );
     }
 
+    public static function organizationRenamed(Ulid $organizationId, string $displayName, string $previousDisplayName, ?User $actor): self
+    {
+        return new self(
+            AuditRecordType::OrganizationRenamed,
+            [
+                'organization_id' => (string) $organizationId,
+                'display_name_from' => $previousDisplayName,
+                'display_name_to' => $displayName,
+                'actor' => self::getUserData($actor),
+            ],
+            $actor?->getId(),
+        );
+    }
+
+    public static function organizationSlugChanged(Ulid $organizationId, string $slug, string $previousSlug, ?User $actor): self
+    {
+        return new self(
+            AuditRecordType::OrganizationSlugChanged,
+            [
+                'organization_id' => (string) $organizationId,
+                'slug_from' => $previousSlug,
+                'slug_to' => $slug,
+                'actor' => self::getUserData($actor),
+            ],
+            $actor?->getId(),
+        );
+    }
+
     public static function packageDeleted(Package $package, ?User $actor): self
     {
         return new self(AuditRecordType::PackageDeleted, ['name' => $package->getName(), 'repository' => $package->getRepository(), 'actor' => self::getUserData($actor, 'automation')], $actor?->getId(), $package->getVendor(), $package->getId());
