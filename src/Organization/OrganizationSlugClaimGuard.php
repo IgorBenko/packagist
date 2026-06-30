@@ -12,6 +12,7 @@
 
 namespace App\Organization;
 
+use App\Entity\Organization as OrganizationReadModel;
 use App\Entity\OrganizationRepository;
 use App\Entity\PackageRepository;
 use App\Entity\SlugReservationRepository;
@@ -37,7 +38,7 @@ final class OrganizationSlugClaimGuard
      * @throws InvalidSlugException if the slug is reserved (deny-list) or collides with a vendor prefix the user cannot access
      * @throws SlugTakenException   if a live organization or active reservation already holds the slug
      */
-    public function assertClaimable(Slug $slug, User $user): void
+    public function assertClaimable(Slug $slug, User $user, ?OrganizationReadModel $claimingOrg = null): void
     {
         if (\in_array($slug->value, NotReservedWord::RESERVED_WORDS, true)) {
             throw new InvalidSlugException(sprintf('"%s" is a reserved name and cannot be used.', $slug->value));
@@ -49,7 +50,7 @@ final class OrganizationSlugClaimGuard
             throw new InvalidSlugException(sprintf('"%s" matches a vendor prefix you do not have access to.', $slug->value));
         }
 
-        if ($this->organizations->slugExists($slug->value) || $this->reservations->isReserved($slug->value)) {
+        if ($this->organizations->slugExists($slug->value) || $this->reservations->isReserved($slug->value, $claimingOrg?->id)) {
             throw new SlugTakenException(sprintf('The organization slug "%s" is already taken.', $slug->value));
         }
     }
