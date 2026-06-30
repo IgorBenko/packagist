@@ -117,7 +117,7 @@ class OrganizationController extends Controller
 
         if ($form->isSubmitted() && $form->isValid()) {
             try {
-                $this->organizationManager->update(
+                $this->organizationManager->edit(
                     $organization,
                     $user,
                     $editRequest->slug,
@@ -125,7 +125,7 @@ class OrganizationController extends Controller
                     $request->getClientIp(),
                 );
 
-                $this->addFlash('success', 'Organization settings updated.');
+                $this->addFlash('success', 'Organization settings edited.');
 
                 return $this->redirectToRoute('organization_settings', ['organization' => $organization->slug]);
             } catch (OrganizationException $e) {
