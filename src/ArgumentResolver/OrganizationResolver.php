@@ -12,10 +12,10 @@
 
 namespace App\ArgumentResolver;
 
-use App\Attribute\VarName;
 use App\Entity\Organization;
 use App\Entity\OrganizationRepository;
-use App\Entity\User;
+use App\Entity\SlugReservationRepository;
+use App\Organization\Http\OrganizationRenamedException;
 use Symfony\Bundle\SecurityBundle\Security;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpKernel\Controller\ValueResolverInterface;
@@ -30,6 +30,7 @@ final readonly class OrganizationResolver implements ValueResolverInterface
 {
     public function __construct(
         private OrganizationRepository $organizations,
+        private SlugReservationRepository $reservations,
         private Security $security,
     ) {
     }
@@ -47,6 +48,14 @@ final readonly class OrganizationResolver implements ValueResolverInterface
 
         $organization = $this->organizations->findOneBySlug($slug);
         if (null === $organization) {
+            $rename = $this->reservations->findActiveRename($slug);
+            if (null !== $rename) {
+                $target = $this->organizations->find($rename->orgId);
+                if (null !== $target && (!$target->isDeleted() || $this->security->isGranted('ROLE_ADMIN'))) {
+                    throw new OrganizationRenamedException($target->slug);
+                }
+            }
+
             throw new NotFoundHttpException('Organization not found.');
         }
 
