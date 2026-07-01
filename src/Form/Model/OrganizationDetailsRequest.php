@@ -17,7 +17,7 @@ use App\Validator\ValidDisplayName;
 use App\Validator\ValidSlug;
 use Symfony\Component\Validator\Constraints as Assert;
 
-class SaveOrganizationDetailsRequest
+class OrganizationDetailsRequest
 {
     #[Assert\NotBlank]
     #[ValidSlug]
