@@ -14,6 +14,7 @@ namespace App\Entity;
 
 use App\Audit\AbandonmentReason;
 use App\Audit\AuditRecordType;
+use App\Audit\Display\OrganizationDisplay;
 use App\Audit\UserRegistrationMethod;
 use App\Audit\VersionDeletionReason;
 use Doctrine\DBAL\Types\Types;
@@ -57,6 +58,8 @@ class AuditRecord
         public readonly ?int $packageId = null,
         #[ORM\Column(nullable: true)]
         public readonly ?int $userId = null,
+        #[ORM\Column(type: 'ulid', nullable: true)]
+        public readonly ?Ulid $organizationId = null,
     ) {
         $this->id = new Ulid();
         $this->datetime = new \DateTimeImmutable();
@@ -78,12 +81,11 @@ class AuditRecord
         return new self(
             AuditRecordType::OrganizationCreated,
             [
-                'organization_id' => (string) $organizationId,
-                'slug' => $slug,
-                'display_name' => $displayName,
+                'organization' => new OrganizationDisplay((string) $organizationId, $slug, $displayName)->toRecord(),
                 'actor' => self::getUserData($actor),
             ],
             $actor?->getId(),
+            organizationId: $organizationId,
         );
     }
 

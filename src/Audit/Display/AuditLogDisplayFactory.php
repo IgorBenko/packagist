@@ -266,8 +266,7 @@ class AuditLogDisplayFactory
             ),
             AuditRecordType::OrganizationCreated => new OrganizationCreatedDisplay(
                 $record->datetime,
-                $record->attributes['slug'],
-                $record->attributes['display_name'],
+                OrganizationDisplay::fromRecord($record->attributes['organization']),
                 $this->buildActor($record->attributes['actor']),
                 $record->ip,
             ),
