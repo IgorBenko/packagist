@@ -208,7 +208,7 @@ audit_log:
         filter_list_entry_added: Entry added
         filter_list_entry_deleted: Entry deleted
         organization_created: Organization created
-        organization_renamed: Organization renamed
+        organization_name_changed: Organization name changed
         organization_slug_changed: Organization slug changed
     enums:
         user-registration-method:
