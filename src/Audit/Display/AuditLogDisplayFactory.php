@@ -272,6 +272,7 @@ class AuditLogDisplayFactory
             ),
             AuditRecordType::OrganizationNameChanged => new OrganizationChangeNameDisplay(
                 $record->datetime,
+                OrganizationDisplay::fromRecord($record->attributes['organization']),
                 $record->attributes['display_name_from'],
                 $record->attributes['display_name_to'],
                 $this->buildActor($record->attributes['actor']),
@@ -279,6 +280,7 @@ class AuditLogDisplayFactory
             ),
             AuditRecordType::OrganizationSlugChanged => new OrganizationSlugChangedDisplay(
                 $record->datetime,
+                OrganizationDisplay::fromRecord($record->attributes['organization']),
                 $record->attributes['slug_from'],
                 $record->attributes['slug_to'],
                 $this->buildActor($record->attributes['actor']),
