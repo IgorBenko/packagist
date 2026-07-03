@@ -17,20 +17,15 @@ use App\Organization\EventStore\OrganizationEventType;
 use Symfony\Component\Uid\Ulid;
 
 /**
- * Creates the aggregate at sequence = 1 and bootstraps the system `owners` team seeded with
- * the creator, who thereby becomes the first owner. The owners team is part of this event
- * (not a separate user-facing TeamCreated), so its id and the creator are carried in the payload.
+ * A user is removed from the entire org (all their teams at once) by an owner or admin.
  */
-final readonly class OrganizationCreated implements DomainEvent
+final readonly class MemberRemoved implements DomainEvent
 {
-    public const OrganizationEventType TYPE = OrganizationEventType::OrganizationCreated;
+    public const OrganizationEventType TYPE = OrganizationEventType::MemberRemoved;
 
     public function __construct(
         public Ulid $organizationId,
-        public string $slug,
-        public string $displayName,
-        public Ulid $ownersTeamId,
-        public int $creatorUserId,
+        public int $userId,
     ) {
     }
 
@@ -47,10 +42,7 @@ final readonly class OrganizationCreated implements DomainEvent
     public function toPayload(): array
     {
         return [
-            'slug' => $this->slug,
-            'displayName' => $this->displayName,
-            'ownersTeamId' => $this->ownersTeamId->toRfc4122(),
-            'creatorUserId' => $this->creatorUserId,
+            'userId' => $this->userId,
         ];
     }
 
@@ -61,10 +53,7 @@ final readonly class OrganizationCreated implements DomainEvent
     {
         return new self(
             $organizationId,
-            (string) $payload['slug'],
-            (string) $payload['displayName'],
-            Ulid::fromString((string) $payload['ownersTeamId']),
-            (int) $payload['creatorUserId'],
+            (int) $payload['userId'],
         );
     }
 }

@@ -17,20 +17,17 @@ use App\Organization\EventStore\OrganizationEventType;
 use Symfony\Component\Uid\Ulid;
 
 /**
- * Creates the aggregate at sequence = 1 and bootstraps the system `owners` team seeded with
- * the creator, who thereby becomes the first owner. The owners team is part of this event
- * (not a separate user-facing TeamCreated), so its id and the creator are carried in the payload.
+ * A custom team is renamed. The payload records only the changed field, as a from/to pair.
  */
-final readonly class OrganizationCreated implements DomainEvent
+final readonly class TeamRenamed implements DomainEvent
 {
-    public const OrganizationEventType TYPE = OrganizationEventType::OrganizationCreated;
+    public const OrganizationEventType TYPE = OrganizationEventType::TeamRenamed;
 
     public function __construct(
         public Ulid $organizationId,
-        public string $slug,
-        public string $displayName,
-        public Ulid $ownersTeamId,
-        public int $creatorUserId,
+        public Ulid $teamId,
+        public string $name,
+        public string $previousName,
     ) {
     }
 
@@ -47,10 +44,10 @@ final readonly class OrganizationCreated implements DomainEvent
     public function toPayload(): array
     {
         return [
-            'slug' => $this->slug,
-            'displayName' => $this->displayName,
-            'ownersTeamId' => $this->ownersTeamId->toRfc4122(),
-            'creatorUserId' => $this->creatorUserId,
+            'teamId' => $this->teamId->toRfc4122(),
+            'changes' => [
+                'name' => ['from' => $this->previousName, 'to' => $this->name],
+            ],
         ];
     }
 
@@ -59,12 +56,14 @@ final readonly class OrganizationCreated implements DomainEvent
      */
     public static function fromPayload(Ulid $organizationId, array $payload): self
     {
+        /** @var array{name: array{from: string, to: string}} $changes */
+        $changes = $payload['changes'];
+
         return new self(
             $organizationId,
-            (string) $payload['slug'],
-            (string) $payload['displayName'],
-            Ulid::fromString((string) $payload['ownersTeamId']),
-            (int) $payload['creatorUserId'],
+            Ulid::fromString((string) $payload['teamId']),
+            (string) $changes['name']['to'],
+            (string) $changes['name']['from'],
         );
     }
 }

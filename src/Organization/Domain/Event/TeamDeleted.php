@@ -17,20 +17,17 @@ use App\Organization\EventStore\OrganizationEventType;
 use Symfony\Component\Uid\Ulid;
 
 /**
- * Creates the aggregate at sequence = 1 and bootstraps the system `owners` team seeded with
- * the creator, who thereby becomes the first owner. The owners team is part of this event
- * (not a separate user-facing TeamCreated), so its id and the creator are carried in the payload.
+ * A custom team is deleted; its memberships cascade. Any user left in zero teams as a result
+ * is no longer an org member. `name` is carried for the transparency log.
  */
-final readonly class OrganizationCreated implements DomainEvent
+final readonly class TeamDeleted implements DomainEvent
 {
-    public const OrganizationEventType TYPE = OrganizationEventType::OrganizationCreated;
+    public const OrganizationEventType TYPE = OrganizationEventType::TeamDeleted;
 
     public function __construct(
         public Ulid $organizationId,
-        public string $slug,
-        public string $displayName,
-        public Ulid $ownersTeamId,
-        public int $creatorUserId,
+        public Ulid $teamId,
+        public string $name,
     ) {
     }
 
@@ -47,10 +44,8 @@ final readonly class OrganizationCreated implements DomainEvent
     public function toPayload(): array
     {
         return [
-            'slug' => $this->slug,
-            'displayName' => $this->displayName,
-            'ownersTeamId' => $this->ownersTeamId->toRfc4122(),
-            'creatorUserId' => $this->creatorUserId,
+            'teamId' => $this->teamId->toRfc4122(),
+            'name' => $this->name,
         ];
     }
 
@@ -61,10 +56,8 @@ final readonly class OrganizationCreated implements DomainEvent
     {
         return new self(
             $organizationId,
-            (string) $payload['slug'],
-            (string) $payload['displayName'],
-            Ulid::fromString((string) $payload['ownersTeamId']),
-            (int) $payload['creatorUserId'],
+            Ulid::fromString((string) $payload['teamId']),
+            (string) $payload['name'],
         );
     }
 }

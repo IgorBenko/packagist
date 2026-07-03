@@ -58,6 +58,13 @@ enum AuditRecordType: string
     case OrganizationCreated = 'organization_created';
     case OrganizationNameChanged = 'organization_name_changed';
     case OrganizationSlugChanged = 'organization_slug_changed';
+    case OrganizationTeamCreated = 'organization_team_created';
+    case OrganizationTeamRenamed = 'organization_team_renamed';
+    case OrganizationTeamDeleted = 'organization_team_deleted';
+    case OrganizationTeamMemberAdded = 'organization_team_member_added';
+    case OrganizationTeamMemberRemoved = 'organization_team_member_removed';
+    case OrganizationMemberRemoved = 'organization_member_removed';
+    case OrganizationMemberLeft = 'organization_member_left';
 
     public function category(): string
     {
@@ -73,7 +80,10 @@ enum AuditRecordType: string
             self::GitHubDisconnectedFromUser, self::TwoFaAuthenticationActivated,
             self::TwoFaAuthenticationDeactivated => 'user',
             self::FilterListEntryAdded, self::FilterListEntryDeleted => 'filterlist',
-            self::OrganizationCreated, self::OrganizationNameChanged, self::OrganizationSlugChanged => 'organization',
+            self::OrganizationCreated, self::OrganizationNameChanged, self::OrganizationSlugChanged,
+            self::OrganizationTeamCreated, self::OrganizationTeamRenamed, self::OrganizationTeamDeleted,
+            self::OrganizationTeamMemberAdded, self::OrganizationTeamMemberRemoved,
+            self::OrganizationMemberRemoved, self::OrganizationMemberLeft => 'organization',
         };
     }
 }
