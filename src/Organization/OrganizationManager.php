@@ -22,6 +22,7 @@ use App\Organization\Domain\Slug;
 use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\EventStore;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
+use Symfony\Bundle\SecurityBundle\Security;
 use Symfony\Component\Uid\Ulid;
 
 final class OrganizationManager
@@ -29,6 +30,7 @@ final class OrganizationManager
     public function __construct(
         private readonly EventStore $eventStore,
         private readonly OrganizationSlugClaimGuard $slugChecker,
+        private readonly Security $security,
     ) {
     }
 
@@ -38,17 +40,17 @@ final class OrganizationManager
      * @throws InvalidSlugException
      * @throws SlugTakenException
      */
-    public function create(User $owner, string $slug, string $displayName, ?string $ip): Organization
+    public function create(User $owner, User $actor, string $slug, string $displayName, ?string $ip): Organization
     {
         $slug = new Slug($slug);
         $displayName = new DisplayName($displayName);
 
         $this->slugChecker->assertClaimable($slug, $owner);
 
-        $organization = Organization::create(new Ulid(), $slug, $displayName);
+        $organization = Organization::create(new Ulid(), $slug, $displayName, new Ulid(), new Ulid(), $owner->getId());
 
         try {
-            $this->eventStore->append($organization, Actor::owner($owner), $ip);
+            $this->eventStore->append($organization, $this->actorFor($organization, $actor), $ip);
         } catch (UniqueConstraintViolationException $e) {
             throw new SlugTakenException(sprintf('The organization slug "%s" is already taken.', $slug->value), 0, $e);
         }
@@ -92,18 +94,27 @@ final class OrganizationManager
         }
 
         try {
-            $this->eventStore->append($aggregate, $this->actorFor($actor, $organization), $ip);
+            $this->eventStore->append($aggregate, $this->actorFor($aggregate, $actor), $ip);
         } catch (UniqueConstraintViolationException $e) {
             throw new SlugTakenException(sprintf('The organization slug "%s" is already taken.', $newSlug->value), 0, $e);
         }
     }
 
-    private function actorFor(User $actor, OrganizationReadModel $organization): Actor
+    /**
+     * An owner acts as a member; a platform moderator who is not an owner acts as `packagist-admin`.
+     * Mirrors {@see OrganizationMembershipManager::actorFor()} so ownership is decided by owners-team
+     * membership on the aggregate, not by who originally created the org.
+     */
+    private function actorFor(Organization $aggregate, User $actor): Actor
     {
-        if ($organization->createdBy?->getId() === $actor->getId()) {
-            return Actor::owner($actor);
+        if ($aggregate->isOwner($actor->getId())) {
+            return Actor::member($actor);
         }
 
-        return Actor::packagistAdmin($actor);
+        if ($this->security->isGranted('ROLE_ADMIN')) {
+            return Actor::packagistAdmin($actor);
+        }
+
+        return Actor::member($actor);
     }
 }

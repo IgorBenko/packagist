@@ -17,7 +17,10 @@ use App\Organization\EventStore\OrganizationEventType;
 use Symfony\Component\Uid\Ulid;
 
 /**
- * Creates the aggregate at sequence = 1; the creator becomes the owner.
+ * Creates the aggregate at sequence = 1. It records the identity of the org and the ids of its two
+ * system teams (so those ids are stable and the roles are unambiguous), but the teams themselves and
+ * the creator's membership in each follow as their own TeamCreated / TeamMemberAdded events in the
+ * same creation batch, keeping every projection a faithful replay of first-class facts.
  */
 final readonly class OrganizationCreated implements DomainEvent
 {
@@ -27,6 +30,8 @@ final readonly class OrganizationCreated implements DomainEvent
         public Ulid $organizationId,
         public string $slug,
         public string $displayName,
+        public Ulid $ownersTeamId,
+        public Ulid $allMembersTeamId,
     ) {
     }
 
@@ -45,6 +50,8 @@ final readonly class OrganizationCreated implements DomainEvent
         return [
             'slug' => $this->slug,
             'displayName' => $this->displayName,
+            'ownersTeamId' => $this->ownersTeamId->toRfc4122(),
+            'allMembersTeamId' => $this->allMembersTeamId->toRfc4122(),
         ];
     }
 
@@ -57,6 +64,8 @@ final readonly class OrganizationCreated implements DomainEvent
             $organizationId,
             (string) $payload['slug'],
             (string) $payload['displayName'],
+            Ulid::fromString((string) $payload['ownersTeamId']),
+            Ulid::fromString((string) $payload['allMembersTeamId']),
         );
     }
 }

@@ -85,8 +85,15 @@ class MenuBuilder
         if ($this->security->isGranted('ROLE_ADMIN_ORGS')) {
             $menu->addChild('Organizations', [
                 'label' => '<span class="icon-users"></span>Organizations',
-                'route' => 'organization_list',
-                'extras' => ['safe_label' => true, 'translation_domain' => false],
+                'route' => 'admin_organization_list',
+                'extras' => [
+                    'safe_label' => true,
+                    'translation_domain' => false,
+                    'routes' => [
+                        ['route' => 'admin_organization_list'],
+                        ['route' => 'admin_organization_create'],
+                    ],
+                ],
             ]);
         }
         $menu->addChild('Transparency log', [
@@ -113,6 +120,37 @@ class MenuBuilder
             'route' => 'organization_show',
             'routeParameters' => ['organization' => $slug],
             'extras' => ['safe_label' => true, 'translation_domain' => false],
+        ]);
+        $menu->addChild($this->translator->trans('menu.organization_teams'), [
+            'label' => '<span class="icon-users"></span>'.$this->translator->trans('menu.organization_teams'),
+            'route' => 'organization_teams',
+            'routeParameters' => ['organization' => $slug],
+            'extras' => [
+                'safe_label' => true,
+                'translation_domain' => false,
+                'routes' => [
+                    ['route' => 'organization_teams', 'parameters' => ['organization' => $slug]],
+                    ['route' => 'organization_team_create', 'parameters' => ['organization' => $slug]],
+                    ['route' => 'organization_team_rename', 'parameters' => ['organization' => $slug]],
+                    ['route' => 'organization_team_delete', 'parameters' => ['organization' => $slug]],
+                    ['route' => 'organization_team_member_add', 'parameters' => ['organization' => $slug]],
+                    ['route' => 'organization_team_member_remove', 'parameters' => ['organization' => $slug]],
+                ],
+            ],
+        ]);
+        $menu->addChild($this->translator->trans('menu.organization_members'), [
+            'label' => '<span class="icon-user"></span>'.$this->translator->trans('menu.organization_members'),
+            'route' => 'organization_members',
+            'routeParameters' => ['organization' => $slug],
+            'extras' => [
+                'safe_label' => true,
+                'translation_domain' => false,
+                'routes' => [
+                    ['route' => 'organization_members', 'parameters' => ['organization' => $slug]],
+                    ['route' => 'organization_member_remove', 'parameters' => ['organization' => $slug]],
+                    ['route' => 'organization_member_leave', 'parameters' => ['organization' => $slug]],
+                ],
+            ],
         ]);
         $menu->addChild($this->translator->trans('menu.organization_settings'), [
             'label' => '<span class="icon-tools"></span>'.$this->translator->trans('menu.organization_settings'),

@@ -36,14 +36,15 @@ class OrganizationEditTest extends IntegrationTestCase
     {
         $owner = $this->persistOwner('renamer', twoFactor: true);
         $manager = static::getService(OrganizationManager::class);
-        $organization = $manager->create($owner, 'acme', 'ACME Corp', null);
+        $organization = $manager->create($owner, $owner, 'acme', 'ACME Corp', null);
 
         $manager->edit($this->readModel('acme'), $owner, 'acme', 'ACME Inc', '203.0.113.5');
 
         self::assertSame('ACME Inc', $this->readModel('acme')->displayName);
 
+        // The rename is the latest event, appended after the creation batch.
         $type = $this->connection->fetchOne(
-            'SELECT type FROM organization_event WHERE aggregateId = :id AND sequence = 2',
+            'SELECT type FROM organization_event WHERE aggregateId = :id ORDER BY sequence DESC LIMIT 1',
             ['id' => $organization->id->toBinary()],
         );
         self::assertSame('organization-name-changed', $type);
@@ -58,7 +59,7 @@ class OrganizationEditTest extends IntegrationTestCase
     {
         $owner = $this->persistOwner('reslugger', twoFactor: true);
         $manager = static::getService(OrganizationManager::class);
-        $organization = $manager->create($owner, 'acme', 'ACME Corp', null);
+        $organization = $manager->create($owner, $owner, 'acme', 'ACME Corp', null);
 
         $manager->edit($this->readModel('acme'), $owner, 'acme-inc', 'ACME Corp', null);
 
@@ -85,37 +86,39 @@ class OrganizationEditTest extends IntegrationTestCase
     {
         $owner = $this->persistOwner('both', twoFactor: true);
         $manager = static::getService(OrganizationManager::class);
-        $organization = $manager->create($owner, 'acme', 'ACME Corp', null);
+        $organization = $manager->create($owner, $owner, 'acme', 'ACME Corp', null);
 
         $manager->edit($this->readModel('acme'), $owner, 'acme-inc', 'ACME Inc', null);
 
+        // The two edit events are appended after the creation batch, in the order they were made.
         $types = $this->connection->fetchFirstColumn(
-            'SELECT type FROM organization_event WHERE aggregateId = :id ORDER BY sequence',
+            "SELECT type FROM organization_event WHERE aggregateId = :id AND type IN ('organization-name-changed', 'organization-slug-changed') ORDER BY sequence",
             ['id' => $organization->id->toBinary()],
         );
-        self::assertSame(['organization-created', 'organization-name-changed', 'organization-slug-changed'], $types);
+        self::assertSame(['organization-name-changed', 'organization-slug-changed'], $types);
     }
 
     public function testUnchangedSubmissionIsNoop(): void
     {
         $owner = $this->persistOwner('noop', twoFactor: true);
         $manager = static::getService(OrganizationManager::class);
-        $organization = $manager->create($owner, 'acme', 'ACME Corp', null);
+        $organization = $manager->create($owner, $owner, 'acme', 'ACME Corp', null);
 
         $manager->edit($this->readModel('acme'), $owner, 'acme', 'ACME Corp', null);
 
-        $count = $this->connection->fetchOne(
-            'SELECT COUNT(*) FROM organization_event WHERE aggregateId = :id',
+        // A no-op edit records nothing, so no name/slug change events are appended.
+        $editEvents = $this->connection->fetchOne(
+            "SELECT COUNT(*) FROM organization_event WHERE aggregateId = :id AND type IN ('organization-name-changed', 'organization-slug-changed')",
             ['id' => $organization->id->toBinary()],
         );
-        self::assertSame(1, (int) $count);
+        self::assertSame(0, (int) $editEvents);
     }
 
     public function testOrgCanReclaimItsOwnPreviousSlug(): void
     {
         $owner = $this->persistOwner('reclaimer', twoFactor: true);
         $manager = static::getService(OrganizationManager::class);
-        $organization = $manager->create($owner, 'acme', 'ACME Corp', null);
+        $organization = $manager->create($owner, $owner, 'acme', 'ACME Corp', null);
 
         // acme -> acme-inc reserves "acme" for this org.
         $manager->edit($this->readModel('acme'), $owner, 'acme-inc', 'ACME Corp', null);
@@ -145,8 +148,8 @@ class OrganizationEditTest extends IntegrationTestCase
     {
         $owner = $this->persistOwner('rivals', twoFactor: true);
         $manager = static::getService(OrganizationManager::class);
-        $manager->create($owner, 'acme', 'ACME Corp', null);
-        $manager->create($owner, 'globex', 'Globex', null);
+        $manager->create($owner, $owner, 'acme', 'ACME Corp', null);
+        $manager->create($owner, $owner, 'globex', 'Globex', null);
 
         // globex renames away, freeing and reserving "globex" against itself.
         $manager->edit($this->readModel('globex'), $owner, 'globex-corp', 'Globex', null);
@@ -160,7 +163,7 @@ class OrganizationEditTest extends IntegrationTestCase
     {
         $owner = $this->persistOwner('reserved', twoFactor: true);
         $manager = static::getService(OrganizationManager::class);
-        $manager->create($owner, 'acme', 'ACME Corp', null);
+        $manager->create($owner, $owner, 'acme', 'ACME Corp', null);
 
         $this->expectException(InvalidSlugException::class);
         $manager->edit($this->readModel('acme'), $owner, 'composer', 'ACME Corp', null);
@@ -170,8 +173,8 @@ class OrganizationEditTest extends IntegrationTestCase
     {
         $owner = $this->persistOwner('taker', twoFactor: true);
         $manager = static::getService(OrganizationManager::class);
-        $manager->create($owner, 'acme', 'ACME Corp', null);
-        $manager->create($owner, 'globex', 'Globex', null);
+        $manager->create($owner, $owner, 'acme', 'ACME Corp', null);
+        $manager->create($owner, $owner, 'globex', 'Globex', null);
 
         $this->expectException(SlugTakenException::class);
         $manager->edit($this->readModel('acme'), $owner, 'globex', 'ACME Corp', null);

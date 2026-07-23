@@ -3,10 +3,6 @@
 {% block title %}{{ 'menu.my_organizations'|trans }} - {{ parent() }}{% endblock %}
 
 {% block content %}
-    {% if is_granted('ROLE_ADMIN_ORGS') %}
-        <a href="{{ path('organization_create') }}" class="btn btn-success pull-right">Create organization</a>
-    {% endif %}
-
     <h2 class="title">{{ 'menu.my_organizations'|trans }}</h2>
 
     {% if organizations is empty %}
