@@ -22,6 +22,18 @@ final readonly class MemberPolicyFacts
     public function __construct(
         public int $userId,
         public bool $hasTwoFactor,
+        /** Whether they are in the `owners` team, which carries requirements of its own. */
+        public bool $isOwner = false,
     ) {
+    }
+
+    /**
+     * Ownership comes from a different source than the rest: the org's own state rather than the user
+     * record, so whoever knows it fills it in. {@see Organization::verifyMemberCompliance()} overrides it
+     * from the aggregate, which is authoritative.
+     */
+    public function withOwnership(bool $isOwner): self
+    {
+        return new self($this->userId, $this->hasTwoFactor, $isOwner);
     }
 }

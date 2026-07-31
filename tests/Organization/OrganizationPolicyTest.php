@@ -26,6 +26,7 @@ use App\Organization\OrganizationManager;
 use App\Organization\OrganizationPolicyEnforcer;
 use App\Organization\OrganizationPolicyManager;
 use App\Tests\IntegrationTestCase;
+use Doctrine\Bundle\DoctrineBundle\DataCollector\DoctrineDataCollector;
 use Doctrine\DBAL\Connection;
 use Symfony\Component\Uid\Ulid;
 
@@ -150,6 +151,80 @@ class OrganizationPolicyTest extends IntegrationTestCase
         self::assertSame(PolicyComplianceReason::TwoFactor, $this->enforcer()->enforce($organization, $member));
         self::assertSame($eventsAfterEnabling, $this->eventCount($organization));
         self::assertSame(1, $this->auditCount($organization, 'organization_member_access_suspended'));
+    }
+
+    public function testEnforcerSuspendsAnOwnerWhoDropsTwoFactorWithNoPolicySet(): void
+    {
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+
+        // Nothing has ever been set on this org: 2FA for owners is a standing rule, not the policy.
+        self::assertNull($this->policies()->findForOrg($organization->id));
+
+        $owner->setTotpSecret(null);
+        static::getEM()->flush();
+
+        self::assertSame(PolicyComplianceReason::TwoFactor, $this->enforcer()->enforce($organization, $owner));
+
+        $ownerRow = $this->members()->findOneByOrgAndUser($organization->id, $owner->getId());
+        self::assertNotNull($ownerRow);
+        self::assertTrue($ownerRow->suspended);
+        self::assertSame(1, $this->auditCount($organization, 'organization_member_access_suspended'));
+    }
+
+    public function testDisablingThePolicyLeavesAnOwnerWithoutTwoFactorSuspended(): void
+    {
+        // A packagist-admin can enable the policy without holding 2FA, which is the only way an owner who
+        // lacks it is suspended by the enabling batch rather than by their own next request.
+        $admin = $this->persistUser('orgadmin', withTwoFactor: true);
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+        $member = $this->joinAsMember($organization, 'plainmember', withTwoFactor: false);
+
+        $owner->setTotpSecret(null);
+        static::getEM()->flush();
+
+        $this->policyManager()->setTwoFactorEnforcement($organization, $admin, true, null);
+        $this->policyManager()->setTwoFactorEnforcement($organization, $admin, false, null);
+
+        // The plain member is back; the owner is not, because the rule holding them was never the policy.
+        $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $member->getId());
+        self::assertNotNull($memberRow);
+        self::assertFalse($memberRow->suspended);
+
+        $ownerRow = $this->members()->findOneByOrgAndUser($organization->id, $owner->getId());
+        self::assertNotNull($ownerRow);
+        self::assertTrue($ownerRow->suspended);
+        self::assertSame(PolicyComplianceReason::TwoFactor, $ownerRow->suspendedReason);
+    }
+
+    public function testCompliantMemberDoesNotReplayTheEventStreamOnAPageView(): void
+    {
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+
+        $this->client->enableProfiler();
+        $this->client->loginUser($owner);
+        $this->client->request('GET', '/organizations/'.$organization->slug.'/policies');
+        self::assertResponseIsSuccessful();
+
+        $profile = $this->client->getProfile();
+        self::assertNotFalse($profile);
+        $collector = $profile->getCollector('db');
+        self::assertInstanceOf(DoctrineDataCollector::class, $collector);
+
+        $streamReads = 0;
+        foreach ($collector->getQueries() as $queries) {
+            foreach ($queries as $query) {
+                if (str_contains((string) $query['sql'], 'FROM organization_event')) {
+                    ++$streamReads;
+                }
+            }
+        }
+
+        // The enforcer runs on every guarded action, so only a genuine change of verdict may touch the
+        // stream: replaying it here would load the org's entire history for a page view.
+        self::assertSame(0, $streamReads);
     }
 
     public function testEnforcerIgnoresNonMembers(): void

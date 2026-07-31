@@ -105,16 +105,12 @@ class OrganizationTeamMemberRepository extends ServiceEntityRepository
 
     /**
      * Whether the user is a member of the org's `owners` team, i.e. an owner.
+     *
+     * find(), not a COUNT: the pair is the identifier, so repeat checks in a request come from the identity
+     * map. Ownership is asked for on almost every guarded action.
      */
     public function isOwner(Ulid $ownersTeamId, int $userId): bool
     {
-        return (bool) $this->createQueryBuilder('m')
-            ->select('COUNT(m.userId)')
-            ->where('m.teamId = :teamId')
-            ->andWhere('m.userId = :userId')
-            ->setParameter('teamId', $ownersTeamId, 'ulid')
-            ->setParameter('userId', $userId)
-            ->getQuery()
-            ->getSingleScalarResult();
+        return $this->find(['teamId' => $ownersTeamId, 'userId' => $userId]) !== null;
     }
 }
