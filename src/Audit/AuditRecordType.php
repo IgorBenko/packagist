@@ -76,6 +76,13 @@ enum AuditRecordType: string
     case OrganizationMemberRemoved = 'organization_member_removed';
     case OrganizationMemberLeft = 'organization_member_left';
 
+    // organization policies, and the suspension a member incurs by failing one. The failing policy itself
+    // is never published: it would tell everyone which security control that member is missing.
+    case OrganizationTwoFactorEnforcementEnabled = 'organization_two_factor_enforcement_enabled';
+    case OrganizationTwoFactorEnforcementDisabled = 'organization_two_factor_enforcement_disabled';
+    case OrganizationMemberAccessSuspended = 'organization_member_access_suspended';
+    case OrganizationMemberAccessRestored = 'organization_member_access_restored';
+
     // organization invitations (pre-membership lifecycle; carry the invited email)
     case OrganizationInvitationSent = 'organization_invitation_sent';
     case OrganizationInvitationResent = 'organization_invitation_resent';
@@ -116,6 +123,8 @@ enum AuditRecordType: string
             self::OrganizationTeamMemberAdded, self::OrganizationTeamMemberRemoved,
             self::OrganizationMemberJoined,
             self::OrganizationMemberRemoved, self::OrganizationMemberLeft,
+            self::OrganizationTwoFactorEnforcementEnabled, self::OrganizationTwoFactorEnforcementDisabled,
+            self::OrganizationMemberAccessSuspended, self::OrganizationMemberAccessRestored,
             self::OrganizationInvitationSent, self::OrganizationInvitationResent,
             self::OrganizationInvitationRevoked, self::OrganizationInvitationAccepted,
             self::OrganizationInvitationDeclined, self::OrganizationInvitationExpired => 'organization',

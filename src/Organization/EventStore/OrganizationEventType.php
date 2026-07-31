@@ -29,6 +29,12 @@ enum OrganizationEventType: string
     case MemberRemoved = 'member-removed';
     case MemberLeft = 'member-left';
 
+    // Policy: the security bar the org requires of everyone acting for it, and the suspension state that
+    // failing it produces. The compliance events are automation-triggered and carry no acting user.
+    case TwoFactorEnforcementEdited = 'two-factor-enforcement-edited';
+    case MemberPolicyComplianceFailed = 'member-policy-compliance-failed';
+    case MemberPolicyComplianceRestored = 'member-policy-compliance-restored';
+
     // A member joining through an accepted invitation. Lives on the org stream (the org aggregate is
     // the source of truth for membership) but is the org-side half of the acceptance, appended in the
     // same transaction as the invitation stream's UserInvitationAccepted.

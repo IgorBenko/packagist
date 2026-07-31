@@ -12,14 +12,15 @@
 
 namespace App\Entity;
 
+use App\Organization\Domain\PolicyComplianceReason;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Uid\Ulid;
 
 /**
  * Read-model projection of an org-level membership. A member's access is still derived from their team
  * memberships ({@see OrganizationTeamMember}); this row carries the org-scoped facts that team rows
- * cannot express (when they joined). It carries no role: an owner is simply a member of the
- * `owners` team.
+ * cannot express (when they joined, whether they are suspended). It carries no role: an owner is simply
+ * a member of the `owners` team.
  *
  * Maintained by {@see \App\Organization\Projection\OrganizationReadModelProjector} alongside team
  * membership so it stays consistent with the org aggregate, the source of truth for membership.
@@ -40,6 +41,17 @@ class OrganizationMember
 
         #[ORM\Column(type: 'datetime_immutable')]
         public readonly \DateTimeImmutable $joinedAt,
+
+        /**
+         * Whether the member fails an active org policy. Their membership and teams are untouched; only
+         * their ability to act for the org is inert until they comply again.
+         */
+        #[ORM\Column]
+        public bool $suspended = false,
+
+        /** The policy they fail, or null when they are not suspended. */
+        #[ORM\Column(length: 32, nullable: true)]
+        public ?PolicyComplianceReason $suspendedReason = null,
     ) {
     }
 }

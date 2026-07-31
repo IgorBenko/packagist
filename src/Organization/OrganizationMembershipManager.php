@@ -18,10 +18,8 @@ use App\Entity\UserRepository;
 use App\Organization\Domain\Exception\TeamNameTakenException;
 use App\Organization\Domain\Organization;
 use App\Organization\Domain\TeamName;
-use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\EventStore;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
-use Symfony\Bundle\SecurityBundle\Security;
 use Symfony\Component\Uid\Ulid;
 
 /**
@@ -35,7 +33,7 @@ final class OrganizationMembershipManager
     public function __construct(
         private readonly EventStore $eventStore,
         private readonly UserRepository $userRepo,
-        private readonly Security $security,
+        private readonly OrganizationActorResolver $actorResolver,
     ) {
     }
 
@@ -104,7 +102,7 @@ final class OrganizationMembershipManager
         $command($aggregate);
 
         try {
-            $this->eventStore->append($aggregate, $this->actorFor($aggregate, $actor), $ip);
+            $this->eventStore->append($aggregate, $this->actorResolver->resolve($aggregate, $actor), $ip);
         } catch (UniqueConstraintViolationException $e) {
             if (str_contains($e->getMessage(), 'org_team_name_uniq')) {
                 throw new TeamNameTakenException('A team with this name already exists in this organization.', 0, $e);
@@ -112,22 +110,5 @@ final class OrganizationMembershipManager
 
             throw $e;
         }
-    }
-
-    /**
-     * An owner acts as `owner`; a platform moderator who is not an owner acts as `packagist-admin`;
-     * any other org member (e.g. leaving on their own) acts as a plain `member`.
-     */
-    private function actorFor(Organization $aggregate, User $actor): Actor
-    {
-        if ($aggregate->isOwner($actor->getId())) {
-            return Actor::member($actor);
-        }
-
-        if ($this->security->isGranted('ROLE_ADMIN')) {
-            return Actor::packagistAdmin($actor);
-        }
-
-        return Actor::member($actor);
     }
 }

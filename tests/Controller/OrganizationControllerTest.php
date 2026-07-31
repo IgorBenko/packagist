@@ -16,15 +16,20 @@ use App\Audit\AuditRecordType;
 use App\Entity\AuditRecord;
 use App\Entity\Organization;
 use App\Entity\OrganizationMember;
+use App\Entity\OrganizationPolicyRepository;
 use App\Entity\OrganizationRepository;
 use App\Entity\OrganizationTeam;
 use App\Entity\OrganizationTeamMember;
 use App\Entity\OrganizationTeamMemberRepository;
 use App\Entity\OrganizationTeamRepository;
 use App\Entity\User;
+use App\Organization\Domain\Organization as OrganizationAggregate;
 use App\Organization\Domain\OrganizationTeamKind;
+use App\Organization\EventStore\Actor;
+use App\Organization\EventStore\EventStore;
 use App\Organization\OrganizationManager;
 use App\Organization\OrganizationMembershipManager;
+use App\Organization\OrganizationPolicyManager;
 use App\Tests\IntegrationTestCase;
 use Symfony\Component\Uid\Ulid;
 
@@ -182,6 +187,73 @@ class OrganizationControllerTest extends IntegrationTestCase
         $organization = $this->organizations()->findOneBySlug('acme');
         self::assertNotNull($organization);
         self::assertSame('ACME Inc', $organization->displayName);
+    }
+
+    public function testOwnerEnablesTwoFactorPolicyViaSettings(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $this->store($owner);
+
+        static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);
+        $organization = $this->organizations()->findOneBySlug('acme');
+        self::assertNotNull($organization);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/settings');
+
+        self::assertResponseIsSuccessful();
+        $form = $crawler->selectButton('Save policies')->form([
+            'organization_policy[enforceTwoFactor]' => '1',
+        ]);
+        $this->client->submit($form);
+
+        self::assertResponseRedirects('/organizations/acme/settings');
+        self::assertTrue(static::getService(OrganizationPolicyRepository::class)->policiesFor($organization->id)->enforceTwoFactor);
+    }
+
+    public function testSuspendedMemberKeepsTheOverviewButLosesEverythingElse(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        // No TOTP secret: this member fails the policy as soon as it is enabled.
+        $member = self::createUser('member', 'member@example.org');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        static::getService(OrganizationPolicyManager::class)->setTwoFactorEnforcement($organization, $owner, true, null);
+
+        $this->client->loginUser($member);
+
+        // View survives so the member can read the banner telling them what to fix.
+        $crawler = $this->client->request('GET', '/organizations/acme');
+        self::assertResponseIsSuccessful();
+        self::assertStringContainsString('Your access to this organization is suspended', $crawler->filter('.alert')->text());
+
+        // Leaving survives too, so a suspended member is never trapped.
+        $this->client->request('GET', '/organizations/acme/members/leave');
+        self::assertResponseIsSuccessful();
+
+        // Everything else redirects them to the overview rather than showing a bare 403.
+        $this->client->request('GET', '/organizations/acme/members');
+        self::assertResponseRedirects('/organizations/acme');
+    }
+
+    public function testMembersListLabelsSuspendedMembersForOwners(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $member = self::createUser('member', 'member@example.org');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        static::getService(OrganizationPolicyManager::class)->setTwoFactorEnforcement($organization, $owner, true, null);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/members');
+
+        self::assertResponseIsSuccessful();
+        self::assertCount(1, $crawler->filter('.label-danger:contains("suspended")'));
     }
 
     public function testTeamsForbiddenForNonOwner(): void
@@ -895,6 +967,25 @@ class OrganizationControllerTest extends IntegrationTestCase
         self::assertNotNull($organization);
 
         $manager->edit($organization, $owner, $to, 'ACME Corp', null);
+    }
+
+    /**
+     * Bootstraps an organization through the event store with a second, plain member, joined the way the
+     * invitation flow would.
+     */
+    private function organizationWithMember(User $owner, User $member): Organization
+    {
+        static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);
+
+        $organization = $this->organizations()->findOneBySlug('acme');
+        self::assertNotNull($organization);
+
+        $eventStore = static::getService(EventStore::class);
+        $aggregate = OrganizationAggregate::reconstitute($organization->id, $eventStore->loadHistory($organization->id));
+        $aggregate->joinViaInvitation($member->getId(), [$organization->allMembersTeamId], new Ulid());
+        $eventStore->append($aggregate, Actor::member($member), null);
+
+        return $organization;
     }
 
     /**

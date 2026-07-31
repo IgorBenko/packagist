@@ -17,6 +17,7 @@ use App\Security\Voter\OrganizationAccessDeniedReason;
 use Symfony\Bundle\SecurityBundle\Security;
 use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 use Symfony\Component\HttpFoundation\RedirectResponse;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\Session\FlashBagAwareSessionInterface;
 use Symfony\Component\HttpKernel\Event\ExceptionEvent;
@@ -56,14 +57,27 @@ class OrganizationPolicyAccessDeniedListener
             $session->getFlashBag()->add('error', $reason->message());
         }
 
-        if ($reason === OrganizationAccessDeniedReason::TwoFactorRequired) {
-            $event->setResponse(new RedirectResponse(
-                $this->router->generate('user_2fa_configure', ['name' => $user->getUsername()]),
-                Response::HTTP_FOUND,
-            ));
-
+        $redirect = $this->redirectFor($reason, $user, $event->getRequest());
+        if ($redirect !== null) {
+            $event->setResponse(new RedirectResponse($redirect, Response::HTTP_FOUND));
             $event->stopPropagation();
         }
+    }
+
+    private function redirectFor(OrganizationAccessDeniedReason $reason, User $user, Request $request): ?string
+    {
+        // A suspended member still has View, so send them to the org overview: it lists what they must do
+        // to have their access restored. Without a slug to redirect to, the bare 403 stands.
+        $slug = $request->attributes->get('organization');
+        if ($reason === OrganizationAccessDeniedReason::PolicySuspended && \is_string($slug)) {
+            return $this->router->generate('organization_show', ['organization' => $slug]);
+        }
+
+        if ($reason === OrganizationAccessDeniedReason::TwoFactorRequired) {
+            return $this->router->generate('user_2fa_configure', ['name' => $user->getUsername()]);
+        }
+
+        return null;
     }
 
     private function getOrganizationAccessDeniedReason(AccessDeniedException $exception): ?OrganizationAccessDeniedReason
