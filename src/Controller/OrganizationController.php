@@ -19,6 +19,7 @@ use App\Entity\Organization;
 use App\Entity\OrganizationInvitation;
 use App\Entity\OrganizationInvitationRepository;
 use App\Entity\OrganizationMemberRepository;
+use App\Entity\OrganizationPolicyRepository;
 use App\Entity\OrganizationRepository;
 use App\Entity\OrganizationTeam;
 use App\Entity\OrganizationTeamMember;
@@ -29,12 +30,14 @@ use App\Entity\UserRepository;
 use App\Form\Model\AddTeamMemberRequest;
 use App\Form\Model\InviteMemberRequest;
 use App\Form\Model\OrganizationDetailsRequest;
+use App\Form\Model\OrganizationPolicyRequest;
 use App\Form\Model\TeamRequest;
 use App\Form\Type\AddTeamMemberType;
 use App\Form\Type\DeleteTeamType;
 use App\Form\Type\InviteMemberType;
 use App\Form\Type\LeaveOrganizationType;
 use App\Form\Type\OrganizationDetailsType;
+use App\Form\Type\OrganizationPolicyType;
 use App\Form\Type\RemoveMemberType;
 use App\Form\Type\RemoveTeamMemberType;
 use App\Form\Type\ResendInvitationType;
@@ -46,6 +49,7 @@ use App\Organization\Domain\Slug;
 use App\Organization\InvitationManager;
 use App\Organization\OrganizationManager;
 use App\Organization\OrganizationMembershipManager;
+use App\Organization\OrganizationPolicyManager;
 use App\QueryFilter\AuditLog\ActorFilter;
 use App\QueryFilter\AuditLog\AuditRecordTypeFilter;
 use App\QueryFilter\AuditLog\DateTimeFromFilter;
@@ -71,8 +75,10 @@ class OrganizationController extends Controller
     public function __construct(
         private readonly OrganizationManager $organizationManager,
         private readonly OrganizationMembershipManager $membershipManager,
+        private readonly OrganizationPolicyManager $policyManager,
         private readonly InvitationManager $invitationManager,
         private readonly OrganizationRepository $organizationRepo,
+        private readonly OrganizationPolicyRepository $organizationPolicyRepo,
         private readonly OrganizationTeamRepository $organizationTeamRepo,
         private readonly OrganizationTeamMemberRepository $organizationTeamMemberRepo,
         private readonly OrganizationInvitationRepository $organizationInvitationRepo,
@@ -94,10 +100,13 @@ class OrganizationController extends Controller
 
     #[IsGranted(OrganizationActions::View->value, 'organization')]
     #[Route(path: '/organizations/{organization}', name: 'organization_show', methods: ['GET'], requirements: ['organization' => Slug::PATTERN])]
-    public function show(Organization $organization): Response
+    public function show(Organization $organization, #[CurrentUser] User $user): Response
     {
         return $this->render('organization/show.html.twig', [
             'organization' => $organization,
+            // A suspended member keeps this page precisely so they can be told what to fix; the voter
+            // has already verified them by the time this runs.
+            'suspendedReason' => $this->organizationMemberRepo->findOneByOrgAndUser($organization->id, $user->getId())?->suspendedReason,
         ]);
     }
 
@@ -130,9 +139,38 @@ class OrganizationController extends Controller
             }
         }
 
+        // Policies are their own axis with their own action and their own event, so they get their own
+        // form on this page rather than sharing the details one.
+        $policyRequest = new OrganizationPolicyRequest();
+        $policyRequest->enforceTwoFactor = $this->organizationPolicyRepo->policiesFor($organization->id)->enforceTwoFactor;
+
+        $policyForm = $this->createForm(OrganizationPolicyType::class, $policyRequest);
+        $policyForm->handleRequest($request);
+
+        if ($policyForm->isSubmitted() && $policyForm->isValid()) {
+            $this->denyAccessUnlessGranted(OrganizationActions::SetTwoFactorPolicy->value, $organization);
+
+            try {
+                $this->policyManager->setTwoFactorEnforcement(
+                    $organization,
+                    $user,
+                    $policyRequest->enforceTwoFactor,
+                    $request->getClientIp(),
+                );
+
+                $this->addFlash('success', 'Organization policies updated.');
+
+                return $this->redirectToRoute('organization_settings', ['organization' => $organization->slug]);
+            } catch (OrganizationException $e) {
+                $policyForm->addError(new FormError($e->getMessage()));
+            }
+        }
+
         return $this->render('organization/settings.html.twig', [
             'organization' => $organization,
             'form' => $form->createView(),
+            'policyForm' => $policyForm->createView(),
+            'suspendedMemberCount' => $this->organizationMemberRepo->countSuspended($organization->id),
         ]);
     }
 
@@ -413,12 +451,15 @@ class OrganizationController extends Controller
             }
         }
 
+        $memberRows = $this->organizationMemberRepo->findByOrgIndexedByUser($organization->id);
+
         $members = [];
         foreach ($teamsByUser as $userId => $teams) {
             $members[] = [
                 'user' => $usersById[$userId] ?? null,
                 'userId' => $userId,
                 'teams' => $teams,
+                'suspendedReason' => $memberRows[$userId]->suspendedReason ?? null,
             ];
         }
 

@@ -381,6 +381,53 @@ class AuditRecord
         return self::organizationInvitation(AuditRecordType::OrganizationInvitationExpired, $organizationId, $slug, $displayName, $email, null);
     }
 
+    /**
+     * The org started or stopped requiring two-factor authentication from its members. The suspensions or
+     * restorations this causes are logged separately, one organization_member_access_* entry per member.
+     */
+    public static function organizationTwoFactorEnforcementEdited(Ulid $organizationId, string $slug, string $displayName, bool $enforced, ?User $actor): self
+    {
+        return new self(
+            $enforced ? AuditRecordType::OrganizationTwoFactorEnforcementEnabled : AuditRecordType::OrganizationTwoFactorEnforcementDisabled,
+            [
+                'organization' => new OrganizationDisplay((string) $organizationId, $slug, $displayName)->toRecord(),
+                'actor' => self::getUserData($actor),
+            ],
+            $actor?->getId(),
+            organizationId: $organizationId,
+        );
+    }
+
+    /**
+     * A member's access was suspended for failing an active org policy, or restored once they satisfied it
+     * again. Which policy they failed is deliberately absent: publishing it would tell everyone which
+     * security control that member is missing. Org members see the reason on the members list instead.
+     */
+    public static function organizationMemberAccessSuspended(Ulid $organizationId, string $slug, string $displayName, ?User $member): self
+    {
+        return self::organizationMemberCompliance(AuditRecordType::OrganizationMemberAccessSuspended, $organizationId, $slug, $displayName, $member);
+    }
+
+    public static function organizationMemberAccessRestored(Ulid $organizationId, string $slug, string $displayName, ?User $member): self
+    {
+        return self::organizationMemberCompliance(AuditRecordType::OrganizationMemberAccessRestored, $organizationId, $slug, $displayName, $member);
+    }
+
+    private static function organizationMemberCompliance(AuditRecordType $type, Ulid $organizationId, string $slug, string $displayName, ?User $member): self
+    {
+        return new self(
+            $type,
+            [
+                'organization' => new OrganizationDisplay((string) $organizationId, $slug, $displayName)->toRecord(),
+                'user' => self::getUserData($member),
+                // No human triggers a compliance transition: it falls out of verifying the member.
+                'actor' => self::getUserData(null, 'automation'),
+            ],
+            organizationId: $organizationId,
+            userId: $member?->getId(),
+        );
+    }
+
     private static function organizationInvitation(AuditRecordType $type, Ulid $organizationId, string $slug, string $displayName, string $email, ?User $actor): self
     {
         return new self(

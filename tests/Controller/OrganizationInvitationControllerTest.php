@@ -24,6 +24,7 @@ use App\Organization\Domain\InvitationStatus;
 use App\Organization\InvitationTokenGenerator;
 use App\Organization\OrganizationManager;
 use App\Organization\OrganizationMembershipManager;
+use App\Organization\OrganizationPolicyManager;
 use App\Tests\IntegrationTestCase;
 use Symfony\Component\Uid\Ulid;
 
@@ -228,6 +229,50 @@ class OrganizationInvitationControllerTest extends IntegrationTestCase
 
         $this->client->submit($crawler->selectButton('Accept invitation')->form());
         self::assertResponseRedirects('/');
+
+        self::assertTrue(
+            static::getService(OrganizationTeamMemberRepository::class)->isMemberOfOrg($organization->id, $alice->getId()),
+        );
+    }
+
+    public function testInviteeCannotAcceptWhileAnOrgPolicyIsUnmet(): void
+    {
+        [$owner, $organization, $backend] = $this->orgWithTeam();
+        // No TOTP secret, so alice cannot satisfy the org's 2FA policy yet.
+        $alice = self::createUser('alice', 'alice@example.org');
+        $this->store($alice);
+
+        $this->client->loginUser($owner);
+        $this->submitInvite($backend, 'alice@example.org');
+        $path = $this->acceptUrlPath();
+        static::getService(OrganizationPolicyManager::class)->setTwoFactorEnforcement($organization, $owner, true, null);
+
+        $this->client->loginUser($alice);
+        $crawler = $this->client->request('GET', $path);
+
+        self::assertResponseIsSuccessful();
+        self::assertStringContainsString('requires the following before you can join', $crawler->filter('.alert-warning')->text());
+
+        // The button is still there, but accepting is refused and the invitation stays pending, so the
+        // same link works once she has enabled 2FA.
+        $this->client->submit($crawler->selectButton('Accept invitation')->form());
+
+        self::assertFalse(
+            static::getService(OrganizationTeamMemberRepository::class)->isMemberOfOrg($organization->id, $alice->getId()),
+        );
+        self::assertSame(InvitationStatus::Pending, $this->pendingInvitation($organization)->status);
+
+        // Once compliant, the same link accepts. The kernel reboots between requests, so alice has to be
+        // reloaded into the current entity manager before she can be changed.
+        $reloaded = static::getEM()->getRepository(User::class)->find($alice->getId());
+        self::assertNotNull($reloaded);
+        $reloaded->setTotpSecret('totp-secret');
+        static::getEM()->flush();
+
+        // Changing the 2FA secret busts the session, so alice signs in again before returning to the link.
+        $this->client->loginUser($reloaded);
+        $crawler = $this->client->request('GET', $path);
+        $this->client->submit($crawler->selectButton('Accept invitation')->form());
 
         self::assertTrue(
             static::getService(OrganizationTeamMemberRepository::class)->isMemberOfOrg($organization->id, $alice->getId()),

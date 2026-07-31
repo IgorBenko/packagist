@@ -31,6 +31,9 @@ enum OrganizationAccessDeniedReason
     /** The action is reserved for Packagist administrators (e.g. restoring a hidden org). */
     case AdminOnly;
 
+    /** The user is a member whose access is suspended for failing an active organization policy. */
+    case PolicySuspended;
+
     /** Extra-data key under which the reason is stored on a denied vote. */
     public const string VOTE_KEY = 'organizationAccessDeniedReason';
 
@@ -41,6 +44,7 @@ enum OrganizationAccessDeniedReason
             self::NotAnOwner => 'Only organization owners can perform this action.',
             self::TwoFactorRequired => 'Two-factor authentication is required to manage an organization.',
             self::AdminOnly => 'This action is restricted to Packagist administrators.',
+            self::PolicySuspended => 'Your access to this organization is suspended until you satisfy its policies.',
         };
     }
 }

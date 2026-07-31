@@ -33,6 +33,24 @@ class OrganizationMemberRepository extends ServiceEntityRepository
     }
 
     /**
+     * @return array<int, OrganizationMember> keyed by user id
+     */
+    public function findByOrgIndexedByUser(Ulid $orgId): array
+    {
+        $members = [];
+        foreach ($this->findBy(['orgId' => $orgId]) as $member) {
+            $members[$member->userId] = $member;
+        }
+
+        return $members;
+    }
+
+    public function countSuspended(Ulid $orgId): int
+    {
+        return $this->count(['orgId' => $orgId, 'suspended' => true]);
+    }
+
+    /**
      * Load the {@see User} behind an org membership by their username (canonicalised here) in a single
      * joined query. Returns null when the user does not exist or is not a member of the org, so callers
      * cannot tell the two cases apart and no user id is exposed.

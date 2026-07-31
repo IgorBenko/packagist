@@ -15,11 +15,13 @@ namespace App\Controller;
 use App\Entity\Organization;
 use App\Entity\OrganizationInvitation;
 use App\Entity\OrganizationMemberRepository;
+use App\Entity\OrganizationPolicyRepository;
 use App\Entity\User;
 use App\Form\Type\InvitationConfirmType;
 use App\Organization\Domain\Exception\OrganizationException;
 use App\Organization\Domain\Slug;
 use App\Organization\InvitationManager;
+use App\Organization\MemberPolicyFactsResolver;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
@@ -40,6 +42,8 @@ class OrganizationInvitationController extends Controller
 {
     public function __construct(
         private readonly OrganizationMemberRepository $organizationMemberRepo,
+        private readonly OrganizationPolicyRepository $organizationPolicyRepo,
+        private readonly MemberPolicyFactsResolver $policyFacts,
         private readonly InvitationManager $invitationManager,
     ) {
     }
@@ -55,6 +59,9 @@ class OrganizationInvitationController extends Controller
             'token' => $token,
             'alreadyMember' => $this->organizationMemberRepo->findOneByOrgAndUser($organization->id, $user->getId()) !== null,
             'needsTwoFactor' => $targetsOwners && !$user->isTotpAuthenticationEnabled(),
+            // An org policy the invitee does not satisfy yet. The invitation stays pending while they sort
+            // it out, so show it as a checklist instead of letting them run into a failing accept.
+            'unmetPolicy' => $this->organizationPolicyRepo->policiesFor($organization->id)->unmetBy($this->policyFacts->forUser($user)),
             'acceptForm' => $this->createForm(InvitationConfirmType::class)->createView(),
             'declineForm' => $this->createForm(InvitationConfirmType::class)->createView(),
         ]);

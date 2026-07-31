@@ -122,9 +122,9 @@ final class Invitation extends AbstractAggregate
      * @throws NoPendingInvitationException the invitation has lapsed
      * @throws AlreadyMemberException        the invitee already belongs to the organization
      * @throws TeamNotFoundException         none of the target teams exist any more
-     * @throws PolicyNotMetException         joining owners requires 2FA
+     * @throws PolicyNotMetException         joining owners requires 2FA, or an active org policy is unmet
      */
-    public function accept(int $userId, bool $alreadyMember, array $acceptedTeamIds, bool $ownersAmongTeams, bool $hasTwoFactor, \DateTimeImmutable $now): void
+    public function accept(int $userId, bool $alreadyMember, array $acceptedTeamIds, bool $ownersAmongTeams, bool $hasTwoFactor, ?PolicyComplianceReason $unmetPolicy, \DateTimeImmutable $now): void
     {
         if (!$this->status->isPending()) {
             throw new InvitationNotPendingException('This invitation is no longer pending.');
@@ -144,6 +144,12 @@ final class Invitation extends AbstractAggregate
 
         if ($ownersAmongTeams && !$hasTwoFactor) {
             throw new PolicyNotMetException('You must enable two-factor authentication before becoming an owner.');
+        }
+
+        // An invitee who cannot meet a policy simply cannot accept yet: the invitation stays pending while
+        // they sort it out, and the same link works once they have.
+        if ($unmetPolicy !== null) {
+            throw new PolicyNotMetException($unmetPolicy->remediation().' The organization requires it of every member.');
         }
 
         $this->record(new UserInvitationAccepted($this->id, $this->email, $userId, $acceptedTeamIds));
@@ -253,7 +259,10 @@ final class Invitation extends AbstractAggregate
             OrganizationEventType::TeamDeleted,
             OrganizationEventType::MemberJoined,
             OrganizationEventType::MemberRemoved,
-            OrganizationEventType::MemberLeft => throw new \LogicException('Not an invitation-stream event: '.$type->value),
+            OrganizationEventType::MemberLeft,
+            OrganizationEventType::TwoFactorEnforcementEdited,
+            OrganizationEventType::MemberPolicyComplianceFailed,
+            OrganizationEventType::MemberPolicyComplianceRestored => throw new \LogicException('Not an invitation-stream event: '.$type->value),
         };
     }
 }
