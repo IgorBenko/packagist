@@ -29,7 +29,7 @@ class OrganizationPolicyType extends AbstractType
             ->add('enforceTwoFactor', CheckboxType::class, [
                 'label' => 'Require two-factor authentication',
                 'required' => false,
-                'help' => 'Members without two-factor authentication are suspended as soon as this is enabled: they keep their membership and teams but cannot act for the organization until they enable it. This includes owners, so make sure someone can still manage the organization.',
+                'help' => 'Owners always need two-factor authentication, however this is set. Enabling it extends the same requirement to every other member: those without it are suspended as soon as you save, keeping their membership and teams but unable to act for the organization until they enable it.',
             ]);
     }
 

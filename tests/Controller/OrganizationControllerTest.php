@@ -189,7 +189,7 @@ class OrganizationControllerTest extends IntegrationTestCase
         self::assertSame('ACME Inc', $organization->displayName);
     }
 
-    public function testOwnerEnablesTwoFactorPolicyViaSettings(): void
+    public function testOwnerEnablesTwoFactorPolicyFromPoliciesPage(): void
     {
         $owner = self::createUser('owner', 'owner@example.org');
         $owner->setTotpSecret('totp-secret');
@@ -200,7 +200,7 @@ class OrganizationControllerTest extends IntegrationTestCase
         self::assertNotNull($organization);
 
         $this->client->loginUser($owner);
-        $crawler = $this->client->request('GET', '/organizations/acme/settings');
+        $crawler = $this->client->request('GET', '/organizations/acme/policies');
 
         self::assertResponseIsSuccessful();
         $form = $crawler->selectButton('Save policies')->form([
@@ -208,8 +208,40 @@ class OrganizationControllerTest extends IntegrationTestCase
         ]);
         $this->client->submit($form);
 
-        self::assertResponseRedirects('/organizations/acme/settings');
+        self::assertResponseRedirects('/organizations/acme/policies');
         self::assertTrue(static::getService(OrganizationPolicyRepository::class)->policiesFor($organization->id)->enforceTwoFactor);
+    }
+
+    public function testPoliciesForbiddenForNonOwner(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $member = self::createUser('member', 'member@example.org');
+        $member->setTotpSecret('totp-secret');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        self::assertNotNull($organization);
+
+        $this->client->loginUser($member);
+        $this->client->request('GET', '/organizations/acme/policies');
+
+        self::assertResponseStatusCodeSame(403);
+    }
+
+    public function testSettingsNoLongerCarriesThePolicyForm(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $this->store($owner);
+        $this->persistOrganization('acme', 'ACME Corp', owner: $owner);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/settings');
+
+        self::assertResponseIsSuccessful();
+        self::assertCount(0, $crawler->selectButton('Save policies'));
+        // Policies live behind their own nav entry now.
+        self::assertCount(1, $crawler->filter('a[href="/organizations/acme/policies"]'));
     }
 
     public function testSuspendedMemberKeepsTheOverviewButLosesEverythingElse(): void
