@@ -162,6 +162,12 @@ class MenuBuilder
                 ],
             ],
         ]);
+        $menu->addChild($this->translator->trans('menu.organization_policies'), [
+            'label' => '<span class="icon-lock"></span>'.$this->translator->trans('menu.organization_policies'),
+            'route' => 'organization_policies',
+            'routeParameters' => ['organization' => $slug],
+            'extras' => ['safe_label' => true, 'translation_domain' => false],
+        ]);
         $menu->addChild($this->translator->trans('menu.organization_settings'), [
             'label' => '<span class="icon-tools"></span>'.$this->translator->trans('menu.organization_settings'),
             'route' => 'organization_settings',
