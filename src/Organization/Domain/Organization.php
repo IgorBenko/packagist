@@ -172,7 +172,9 @@ final class Organization extends AbstractAggregate
             return;
         }
 
-        $unmet = $this->policies->unmetBy($facts);
+        // The aggregate is authoritative on ownership, so it fills that fact in rather than trusting the
+        // caller, who may have resolved the rest from the read model.
+        $unmet = $this->policies->unmetBy($facts->withOwnership($this->isOwner($facts->userId)));
         $suspendedFor = $this->suspendedMembers[$facts->userId] ?? null;
 
         if ($unmet === $suspendedFor) {

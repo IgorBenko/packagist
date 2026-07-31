@@ -244,6 +244,28 @@ class OrganizationControllerTest extends IntegrationTestCase
         self::assertCount(1, $crawler->filter('a[href="/organizations/acme/policies"]'));
     }
 
+    public function testOwnerWhoDropsTwoFactorIsSentToEnableItAgain(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $this->store($owner);
+
+        static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);
+
+        // No policy is set on this org: an owner still owes 2FA, so dropping it suspends them.
+        $reloaded = static::getEM()->getRepository(User::class)->find($owner->getId());
+        self::assertNotNull($reloaded);
+        $reloaded->setTotpSecret(null);
+        static::getEM()->flush();
+
+        $this->client->loginUser($reloaded);
+        $this->client->request('GET', '/organizations/acme/policies');
+
+        // A missing second factor names its own remedy, so they go to 2FA setup rather than to the
+        // generic suspended banner.
+        self::assertResponseRedirects('/users/owner/2fa/');
+    }
+
     public function testSuspendedMemberKeepsTheOverviewButLosesEverythingElse(): void
     {
         $owner = self::createUser('owner', 'owner@example.org');
@@ -266,9 +288,9 @@ class OrganizationControllerTest extends IntegrationTestCase
         $this->client->request('GET', '/organizations/acme/members/leave');
         self::assertResponseIsSuccessful();
 
-        // Everything else redirects them to the overview rather than showing a bare 403.
+        // Everything else is refused, and 2FA names its own remedy, so they are sent there over a bare 403.
         $this->client->request('GET', '/organizations/acme/members');
-        self::assertResponseRedirects('/organizations/acme');
+        self::assertResponseRedirects('/users/member/2fa/');
     }
 
     public function testMembersListLabelsSuspendedMembersForOwners(): void
