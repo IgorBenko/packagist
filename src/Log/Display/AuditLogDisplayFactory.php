@@ -31,6 +31,7 @@ use App\Log\Display\Event\MaintainerAddedDisplay;
 use App\Log\Display\Event\MaintainerRemovedDisplay;
 use App\Log\Display\Event\OrganizationCreatedDisplay;
 use App\Log\Display\Event\OrganizationInvitationDisplay;
+use App\Log\Display\Event\OrganizationMemberComplianceDisplay;
 use App\Log\Display\Event\OrganizationMemberJoinedDisplay;
 use App\Log\Display\Event\OrganizationMemberLeftDisplay;
 use App\Log\Display\Event\OrganizationMemberRemovedDisplay;
@@ -41,6 +42,7 @@ use App\Log\Display\Event\OrganizationTeamDeletedDisplay;
 use App\Log\Display\Event\OrganizationTeamMemberAddedDisplay;
 use App\Log\Display\Event\OrganizationTeamMemberRemovedDisplay;
 use App\Log\Display\Event\OrganizationTeamRenamedDisplay;
+use App\Log\Display\Event\OrganizationTwoFactorEnforcementDisplay;
 use App\Log\Display\Event\PackageAbandonedDisplay;
 use App\Log\Display\Event\PackageCreatedDisplay;
 use App\Log\Display\Event\PackageDeletedDisplay;
@@ -469,6 +471,23 @@ class AuditLogDisplayFactory
                 $record->ip,
             ),
             AuditLogEventType::OrganizationMemberLeft => new OrganizationMemberLeftDisplay(
+                $record->datetime,
+                OrganizationDisplay::fromRecord($record->attributes['organization']),
+                $this->buildActor($record->attributes['user']),
+                $this->buildActor($record->attributes['actor']),
+                $record->ip,
+            ),
+            AuditLogEventType::OrganizationTwoFactorEnforcementEnabled,
+            AuditLogEventType::OrganizationTwoFactorEnforcementDisabled => new OrganizationTwoFactorEnforcementDisplay(
+                $record->type,
+                $record->datetime,
+                OrganizationDisplay::fromRecord($record->attributes['organization']),
+                $this->buildActor($record->attributes['actor']),
+                $record->ip,
+            ),
+            AuditLogEventType::OrganizationMemberAccessSuspended,
+            AuditLogEventType::OrganizationMemberAccessRestored => new OrganizationMemberComplianceDisplay(
+                $record->type,
                 $record->datetime,
                 OrganizationDisplay::fromRecord($record->attributes['organization']),
                 $this->buildActor($record->attributes['user']),

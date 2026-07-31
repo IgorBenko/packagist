@@ -24,4 +24,33 @@
 
         <input class="btn btn-success btn-lg" type="submit" value="Save changes" />
     {{ form_end(form) }}
+
+    <h4 class="title">Policies</h4>
+
+    <p class="text-muted">
+        Policies raise the security bar for everyone acting on behalf of this organization, owners included.
+        A member who no longer satisfies one keeps their membership and teams, but cannot act for the
+        organization until they do.
+    </p>
+
+    {% if suspendedMemberCount > 0 %}
+        <div class="alert alert-warning">
+            {{ suspendedMemberCount }} {{ suspendedMemberCount == 1 ? 'member is' : 'members are' }} currently
+            suspended for failing a policy. See the
+            <a href="{{ path('organization_members', { organization: organization.slug }) }}">members list</a>.
+        </div>
+    {% endif %}
+
+    {{ form_start(policyForm, { 'attr': { 'class': 'organization_policies' } }) }}
+        {{ form_errors(policyForm) }}
+
+        <div class="form-group clearfix">
+            {{ form_widget(policyForm.enforceTwoFactor) }}
+            {{ form_label(policyForm.enforceTwoFactor) }}
+            {{ form_errors(policyForm.enforceTwoFactor) }}
+            {{ form_help(policyForm.enforceTwoFactor) }}
+        </div>
+
+        <input class="btn btn-success btn-lg" type="submit" value="Save policies" />
+    {{ form_end(policyForm) }}
 {% endblock %}

@@ -28,7 +28,6 @@ use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\EventStore;
 use Psr\Clock\ClockInterface;
 use Symfony\Bridge\Twig\Mime\TemplatedEmail;
-use Symfony\Bundle\SecurityBundle\Security;
 use Symfony\Component\Mailer\MailerInterface;
 use Symfony\Component\Mime\Address;
 use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
@@ -54,7 +53,8 @@ final class InvitationManager
         private readonly MailerInterface $mailer,
         private readonly UrlGeneratorInterface $urlGenerator,
         private readonly ClockInterface $clock,
-        private readonly Security $security,
+        private readonly MemberPolicyFactsResolver $policyFacts,
+        private readonly OrganizationActorResolver $actorResolver,
         private readonly string $mailFromEmail,
         private readonly string $mailFromName,
     ) {
@@ -155,6 +155,7 @@ final class InvitationManager
             $acceptedTeamIds,
             $ownersAmongTeams,
             $user->isTotpAuthenticationEnabled(),
+            $organization->policies()->unmetBy($this->policyFacts->forUser($user)),
             $now,
         );
         $organization->joinViaInvitation($user->getId(), $acceptedTeamIds, $invitation->id);
@@ -246,20 +247,15 @@ final class InvitationManager
     }
 
     /**
-     * An owner acts as a plain member; a platform moderator who is not an owner acts as `packagist-admin`.
-     * Mirrors {@see OrganizationMembershipManager::actorFor()}.
+     * Ownership comes from the team-member read model here: the invitation flow does not reconstitute the
+     * org aggregate for sending, resending or revoking.
      */
     private function ownerActor(User $actor, OrganizationReadModel $organization): Actor
     {
-        if ($this->organizationTeamMemberRepo->isOwner($organization->ownersTeamId, $actor->getId())) {
-            return Actor::member($actor);
-        }
-
-        if ($this->security->isGranted('ROLE_ADMIN_ORGS')) {
-            return Actor::packagistAdmin($actor);
-        }
-
-        return Actor::member($actor);
+        return $this->actorResolver->resolveFor(
+            $this->organizationTeamMemberRepo->isOwner($organization->ownersTeamId, $actor->getId()),
+            $actor,
+        );
     }
 
     private function sendInvitationEmail(OrganizationReadModel $organization, Email $email, Ulid $invitationId, string $rawToken, \DateTimeImmutable $expiresAt): void

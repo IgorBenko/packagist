@@ -1,0 +1,12 @@
+{#
+    One organization policy the current user does not satisfy, and where to go to fix it. Shared by the
+    suspension banner and the invitation compliance checklist. The copy lives on
+    App\Organization\Domain\PolicyComplianceReason; only the link belongs here, so route names stay out
+    of the domain.
+#}
+<li>
+    {{ reason.remediation }}
+    {% if reason.value == 'two_factor' and app.user %}
+        <a href="{{ path('user_2fa_configure', { name: app.user.username }) }}">Set up two-factor authentication</a>
+    {% endif %}
+</li>
