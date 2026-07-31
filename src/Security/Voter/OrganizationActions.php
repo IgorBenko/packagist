@@ -34,6 +34,11 @@ enum OrganizationActions: string
     case ViewMembers = 'view-members';
     case RemoveMember = 'remove-member';
 
+     // Policies — owner-only. One action covers every policy: they are all owner-only and all edited from
+     // the same page, so a case per policy would only ever be granted and denied together.
+     case ViewPolicies = 'view-policies';
+     case EditPolicies = 'edit-policies';
+
     // Invitations, owner-only. Accepting and declining are invitee actions, not governed by this voter.
     case ViewInvitations = 'view-invitations';
     case InviteMember = 'invite-member';

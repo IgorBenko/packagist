@@ -16,6 +16,7 @@ use App\Entity\Organization;
 use App\Entity\OrganizationMemberRepository;
 use App\Entity\OrganizationTeamMemberRepository;
 use App\Entity\User;
+use App\Organization\OrganizationPolicyEnforcer;
 use Symfony\Bundle\SecurityBundle\Security;
 use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
 use Symfony\Component\Security\Core\Authorization\Voter\Vote;
@@ -30,6 +31,7 @@ class OrganizationVoter extends Voter
         private Security $security,
         private OrganizationTeamMemberRepository $organizationTeamMemberRepo,
         private OrganizationMemberRepository $organizationMemberRepo,
+        private OrganizationPolicyEnforcer $policyEnforcer,
     ) {
     }
 
@@ -58,6 +60,15 @@ class OrganizationVoter extends Voter
 
         if ($organization->isDeleted()) {
             return false;
+        }
+
+        // Verify the member against the org's policies on every request they make for it, then let the
+        // suspension it may produce decide. A suspended member keeps View and Leave so they can see what
+        // to fix and can walk away; everything else is inert.
+        if ($this->policyEnforcer->enforce($organization, $user) !== null
+            && !\in_array($action, [OrganizationActions::View, OrganizationActions::Leave], true)
+        ) {
+            return $this->deny($vote, OrganizationAccessDeniedReason::PolicySuspended);
         }
 
         $reason = $this->denialReason($action, $organization, $user);
@@ -92,6 +103,7 @@ class OrganizationVoter extends Voter
             OrganizationActions::AddTeamMember,
             OrganizationActions::RemoveTeamMember,
             OrganizationActions::RemoveMember,
+            OrganizationActions::SetTwoFactorPolicy,
             OrganizationActions::ViewInvitations,
             OrganizationActions::InviteMember,
             OrganizationActions::ResendInvitation,
