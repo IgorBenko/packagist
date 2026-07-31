@@ -14,6 +14,8 @@ namespace App\Organization;
 
 use App\Entity\Organization as OrganizationReadModel;
 use App\Entity\OrganizationMemberRepository;
+use App\Entity\OrganizationPolicyRepository;
+use App\Entity\OrganizationTeamMemberRepository;
 use App\Entity\User;
 use App\Organization\Domain\Organization;
 use App\Organization\Domain\PolicyComplianceReason;
@@ -22,11 +24,12 @@ use App\Organization\EventStore\ConcurrencyException;
 use App\Organization\EventStore\EventStore;
 
 /**
- * Verifies a member against the org's policies on the requests where they act for it, and records the
+ * Verifies a member against the org's requirements on the requests where they act for it, and records the
  * suspension or restoration that verdict produces. There is no background sweep: a member who never acts
  * is never re-checked, which is harmless because they can do nothing without a request.
  *
- * Called from {@see \App\Security\Voter\OrganizationVoter}, so it runs before any guarded action.
+ * Called from {@see \App\Security\Voter\OrganizationVoter}, so it runs on every page view of an org: the
+ * verdict comes from the read model and the event stream is only touched when it changed.
  */
 final class OrganizationPolicyEnforcer
 {
@@ -35,7 +38,9 @@ final class OrganizationPolicyEnforcer
 
     public function __construct(
         private readonly EventStore $eventStore,
-        private readonly OrganizationMemberRepository $members,
+        private readonly OrganizationMemberRepository $organizationMemberRepo,
+        private readonly OrganizationTeamMemberRepository $organizationTeamMemberRepo,
+        private readonly OrganizationPolicyRepository $organizationPolicyRepo,
         private readonly MemberPolicyFactsResolver $facts,
     ) {
     }
@@ -61,10 +66,36 @@ final class OrganizationPolicyEnforcer
     private function verify(OrganizationReadModel $organization, User $user): ?PolicyComplianceReason
     {
         // Policies apply to members. Non-members are refused by the voter on membership grounds instead.
-        if ($this->members->findOneByOrgAndUser($organization->id, $user->getId()) === null) {
+        $member = $this->organizationMemberRepo->findOneByOrgAndUser($organization->id, $user->getId());
+        if ($member === null) {
             return null;
         }
 
+        // Read model only: three indexed lookups, where replaying the stream would load the org's whole
+        // history for a page view.
+        $unmet = $this->organizationPolicyRepo->policiesFor($organization->id)->unmetBy(
+            $this->facts->forUser($user)->withOwnership(
+                $this->organizationTeamMemberRepo->isOwner($organization->ownersTeamId, $user->getId()),
+            ),
+        );
+
+        if ($unmet === $member->suspendedReason) {
+            return $unmet;
+        }
+
+        // The aggregate's view of ownership is authoritative, but it can only speak for a member it knows:
+        // a stream that cannot confirm the membership must not hand back access the read model refused.
+        return $this->recordTransition($organization, $user) ?? $unmet;
+    }
+
+    /**
+     * The verdict changed, so the state transition has to reach the event stream. Only this path pays for
+     * the aggregate; the aggregate re-derives the verdict itself, from its own view of ownership, and is
+     * the one that decides what gets recorded. Null when it has no opinion, including when it does not know
+     * the member at all.
+     */
+    private function recordTransition(OrganizationReadModel $organization, User $user): ?PolicyComplianceReason
+    {
         $aggregate = Organization::reconstitute(
             $organization->id,
             $this->eventStore->loadHistory($organization->id),
@@ -73,7 +104,6 @@ final class OrganizationPolicyEnforcer
         $aggregate->verifyMemberCompliance($this->facts->forUser($user));
 
         try {
-            // A no-op when the verdict is unchanged: the aggregate recorded nothing and append returns early.
             $this->eventStore->append($aggregate, Actor::automation(), null);
         } catch (ConcurrencyException) {
             // Another request resolved this org's stream first. The verdict below is still the right answer

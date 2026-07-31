@@ -152,6 +152,72 @@ class OrganizationPolicyAggregateTest extends TestCase
         self::assertSame([], $organization->pullPendingEvents());
     }
 
+    public function testOwnerWithoutTwoFactorIsSuspendedEvenWithNoPolicySet(): void
+    {
+        $organization = $this->orgWithSecondMember();
+
+        // No policy has ever been set here: 2FA for owners is a standing rule, not this policy.
+        $organization->verifyMemberCompliance(new MemberPolicyFacts(self::OWNER, false));
+
+        $events = $organization->pullPendingEvents();
+        self::assertCount(1, $events);
+        self::assertInstanceOf(MemberPolicyComplianceFailed::class, $events[0]);
+        self::assertSame(self::OWNER, $events[0]->userId);
+        self::assertSame(PolicyComplianceReason::TwoFactor, $events[0]->reason);
+    }
+
+    public function testPlainMemberWithoutTwoFactorIsFineWithNoPolicySet(): void
+    {
+        $organization = $this->orgWithSecondMember();
+
+        $organization->verifyMemberCompliance(new MemberPolicyFacts(self::MEMBER, false));
+
+        self::assertSame([], $organization->pullPendingEvents());
+        self::assertNull($organization->suspensionReasonFor(self::MEMBER));
+    }
+
+    public function testDisablingTheTwoFactorPolicyDoesNotRestoreAnOwnerWithoutTwoFactor(): void
+    {
+        $organization = $this->orgWithSecondMember();
+        $facts = [
+            self::OWNER => new MemberPolicyFacts(self::OWNER, false),
+            self::MEMBER => new MemberPolicyFacts(self::MEMBER, false),
+        ];
+
+        // A packagist-admin can enable the policy without holding 2FA, which is how an owner who lacks it
+        // ends up suspended by the same batch.
+        $organization->setTwoFactorEnforcement(true, true, $facts);
+        $organization->pullPendingEvents();
+        self::assertSame(PolicyComplianceReason::TwoFactor, $organization->suspensionReasonFor(self::OWNER));
+
+        $organization->setTwoFactorEnforcement(false, true, $facts);
+
+        // The plain member is restored; the owner is not, since the rule holding them was never this policy.
+        $restored = array_values(array_filter(
+            $organization->pullPendingEvents(),
+            static fn ($event): bool => $event instanceof MemberPolicyComplianceRestored,
+        ));
+        self::assertCount(1, $restored);
+        self::assertSame(self::MEMBER, $restored[0]->userId);
+
+        self::assertSame(PolicyComplianceReason::TwoFactor, $organization->suspensionReasonFor(self::OWNER));
+        self::assertNull($organization->suspensionReasonFor(self::MEMBER));
+    }
+
+    public function testOwnerIsRestoredOnceTheyEnableTwoFactor(): void
+    {
+        $organization = $this->orgWithSecondMember();
+        $organization->verifyMemberCompliance(new MemberPolicyFacts(self::OWNER, false));
+        $organization->pullPendingEvents();
+
+        $organization->verifyMemberCompliance(new MemberPolicyFacts(self::OWNER, true));
+
+        $events = $organization->pullPendingEvents();
+        self::assertCount(1, $events);
+        self::assertInstanceOf(MemberPolicyComplianceRestored::class, $events[0]);
+        self::assertNull($organization->suspensionReasonFor(self::OWNER));
+    }
+
     public function testVerifyMemberComplianceIgnoresNonMembers(): void
     {
         $organization = $this->orgWithSecondMember();

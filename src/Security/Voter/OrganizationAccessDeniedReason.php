@@ -25,13 +25,19 @@ enum OrganizationAccessDeniedReason
     /** The user is a member but not an owner, and the action is owner-only. */
     case NotAnOwner;
 
-    /** The user is an owner of a live org but has not enabled the required 2FA. */
+    /**
+     * The user has not enabled the 2FA they need to act for this org: always, as an owner, or because the org
+     * enforces it for every member. Preferred over {@see self::PolicySuspended}, which names no remedy.
+     */
     case TwoFactorRequired;
 
     /** The action is reserved for Packagist administrators (e.g. restoring a hidden org). */
     case AdminOnly;
 
-    /** The user is a member whose access is suspended for failing an active organization policy. */
+    /**
+     * A member suspended for failing policies that cannot be answered with one remedy, so they are sent to
+     * the organization overview, which lists all of them. A single failure reports its own reason instead.
+     */
     case PolicySuspended;
 
     /** Extra-data key under which the reason is stored on a denied vote. */
@@ -42,7 +48,7 @@ enum OrganizationAccessDeniedReason
         return match ($this) {
             self::NotAMember => 'You are not a member of this organization.',
             self::NotAnOwner => 'Only organization owners can perform this action.',
-            self::TwoFactorRequired => 'Two-factor authentication is required to manage an organization.',
+            self::TwoFactorRequired => 'Two-factor authentication is required to act for this organization.',
             self::AdminOnly => 'This action is restricted to Packagist administrators.',
             self::PolicySuspended => 'Your access to this organization is suspended until you satisfy its policies.',
         };
