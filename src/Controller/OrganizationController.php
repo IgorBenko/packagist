@@ -139,16 +139,27 @@ class OrganizationController extends Controller
             }
         }
 
-        // Policies are their own axis with their own action and their own event, so they get their own
-        // form on this page rather than sharing the details one.
+        return $this->render('organization/settings.html.twig', [
+            'organization' => $organization,
+            'form' => $form->createView(),
+        ]);
+    }
+
+    /**
+     * Its own page rather than a section of the settings form: saving here can suspend members immediately.
+     */
+    #[IsGranted(OrganizationActions::ViewPolicies->value, 'organization')]
+    #[Route(path: '/organizations/{organization}/policies', name: 'organization_policies', methods: ['GET', 'POST'], requirements: ['organization' => Slug::PATTERN])]
+    public function policies(Request $request, Organization $organization, #[CurrentUser] User $user): Response
+    {
         $policyRequest = new OrganizationPolicyRequest();
         $policyRequest->enforceTwoFactor = $this->organizationPolicyRepo->policiesFor($organization->id)->enforceTwoFactor;
 
-        $policyForm = $this->createForm(OrganizationPolicyType::class, $policyRequest);
-        $policyForm->handleRequest($request);
+        $form = $this->createForm(OrganizationPolicyType::class, $policyRequest);
+        $form->handleRequest($request);
 
-        if ($policyForm->isSubmitted() && $policyForm->isValid()) {
-            $this->denyAccessUnlessGranted(OrganizationActions::SetTwoFactorPolicy->value, $organization);
+        if ($form->isSubmitted() && $form->isValid()) {
+            $this->denyAccessUnlessGranted(OrganizationActions::EditPolicies->value, $organization);
 
             try {
                 $this->policyManager->setTwoFactorEnforcement(
@@ -160,16 +171,15 @@ class OrganizationController extends Controller
 
                 $this->addFlash('success', 'Organization policies updated.');
 
-                return $this->redirectToRoute('organization_settings', ['organization' => $organization->slug]);
+                return $this->redirectToRoute('organization_policies', ['organization' => $organization->slug]);
             } catch (OrganizationException $e) {
-                $policyForm->addError(new FormError($e->getMessage()));
+                $form->addError(new FormError($e->getMessage()));
             }
         }
 
-        return $this->render('organization/settings.html.twig', [
+        return $this->render('organization/policies.html.twig', [
             'organization' => $organization,
             'form' => $form->createView(),
-            'policyForm' => $policyForm->createView(),
             'suspendedMemberCount' => $this->organizationMemberRepo->countSuspended($organization->id),
         ]);
     }
