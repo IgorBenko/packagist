@@ -13,6 +13,7 @@
 namespace App\Entity;
 
 use App\Organization\Domain\UnmetPolicies;
+use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Uid\Ulid;
 
@@ -30,6 +31,21 @@ use Symfony\Component\Uid\Ulid;
 #[ORM\Index(name: 'org_member_user_idx', columns: ['userId'])]
 class OrganizationMember
 {
+    /**
+     * Backs {@see $suspendedPolicies}, which is what every caller uses.
+     *
+     * @var list<string>
+     */
+    #[ORM\Column(name: 'suspendedPolicies', type: Types::JSON)]
+    private array $suspendedPolicyValues = [];
+
+    public UnmetPolicies $suspendedPolicies {
+        get => UnmetPolicies::fromValues($this->suspendedPolicyValues);
+        set (UnmetPolicies $policies) {
+            $this->suspendedPolicyValues = $policies->toValues();
+        }
+    }
+
     public function __construct(
         #[ORM\Id]
         #[ORM\Column(type: 'ulid')]
@@ -50,13 +66,8 @@ class OrganizationMember
         #[ORM\Column]
         public bool $suspended = false,
 
-        /**
-         * Every policy they fail, empty when they are not suspended. The full set is stored so a suspended
-         * member can be shown all of it at once, and so clearing one policy restores only the members who
-         * failed nothing else.
-         */
-        #[ORM\Column(type: 'unmet_policies')]
-        public UnmetPolicies $suspendedPolicies = new UnmetPolicies(),
+        UnmetPolicies $suspendedPolicies = new UnmetPolicies(),
     ) {
+        $this->suspendedPolicies = $suspendedPolicies;
     }
 }
