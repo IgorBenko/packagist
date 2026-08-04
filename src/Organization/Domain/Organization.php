@@ -12,6 +12,7 @@
 
 namespace App\Organization\Domain;
 
+use App\Organization\Domain\Event\AllowedEmailDomainsEdited;
 use App\Organization\Domain\Event\MemberJoined;
 use App\Organization\Domain\Event\MemberLeft;
 use App\Organization\Domain\Event\MemberPolicyComplianceFailed;
@@ -26,6 +27,7 @@ use App\Organization\Domain\Event\TeamMemberAdded;
 use App\Organization\Domain\Event\TeamMemberRemoved;
 use App\Organization\Domain\Event\TeamRenamed;
 use App\Organization\Domain\Event\TwoFactorEnforcementEdited;
+use App\Organization\Domain\Exception\EmailDomainMismatchException;
 use App\Organization\Domain\Exception\LastOwnerProtectedException;
 use App\Organization\Domain\Exception\NotAMemberException;
 use App\Organization\Domain\Exception\TeamNameTakenException;
@@ -149,9 +151,40 @@ final class Organization extends AbstractAggregate
         }
 
         $this->record(new TwoFactorEnforcementEdited($this->id, $enforced));
+        $this->reverifyMembers($memberFacts);
+    }
 
-        // Re-evaluate against the policy as it now stands. A member whose facts are missing (e.g. their
-        // user record is gone) is left alone; their next request verifies them inline.
+    /**
+     * Require member account emails to be on one of these domains, or accept any again when the set is
+     * empty. No-op when the set is unchanged. Addresses are known locally, so every member is evaluated in
+     * the same batch, as with 2FA enforcement.
+     *
+     * @param array<int, MemberPolicyFacts> $memberFacts userId => facts, for every current member
+     *
+     * @throws EmailDomainMismatchException an owner cannot impose a domain they are not on themselves
+     */
+    public function setAllowedEmailDomains(AllowedEmailDomains $domains, ?string $actorEmailDomain, array $memberFacts): void
+    {
+        if ($this->policies->allowedEmailDomains->equals($domains)) {
+            return;
+        }
+
+        if (!$domains->isEmpty() && !$domains->matches($actorEmailDomain)) {
+            throw new EmailDomainMismatchException('Your own account email address must be on one of the domains you require, otherwise saving this would suspend you from your own organization.');
+        }
+
+        $this->record(new AllowedEmailDomainsEdited($this->id, $domains));
+        $this->reverifyMembers($memberFacts);
+    }
+
+    /**
+     * A member whose facts are missing (e.g. their user record is gone) is left alone; their next request
+     * verifies them inline.
+     *
+     * @param array<int, MemberPolicyFacts> $memberFacts userId => facts, for every current member
+     */
+    private function reverifyMembers(array $memberFacts): void
+    {
         foreach ($this->members as $userId) {
             if (isset($memberFacts[$userId])) {
                 $this->verifyMemberCompliance($memberFacts[$userId]);
@@ -499,6 +532,7 @@ final class Organization extends AbstractAggregate
             $event instanceof MemberRemoved => $this->applyMemberGone($event->userId),
             $event instanceof MemberLeft => $this->applyMemberGone($event->userId),
             $event instanceof TwoFactorEnforcementEdited => $this->policies = $this->policies->withTwoFactorEnforcement($event->enforced),
+            $event instanceof AllowedEmailDomainsEdited => $this->policies = $this->policies->withAllowedEmailDomains($event->allowedEmailDomains),
             $event instanceof MemberPolicyComplianceFailed => $this->suspendedMembers[$event->userId] = $event->unmetPolicies,
             $event instanceof MemberPolicyComplianceRestored => $this->applyComplianceRestored($event),
             default => throw new \LogicException('Unhandled organization event: '.$event->eventType()->value),
@@ -584,6 +618,7 @@ final class Organization extends AbstractAggregate
             OrganizationEventType::MemberRemoved => MemberRemoved::fromPayload($id, $payload),
             OrganizationEventType::MemberLeft => MemberLeft::fromPayload($id, $payload),
             OrganizationEventType::TwoFactorEnforcementEdited => TwoFactorEnforcementEdited::fromPayload($id, $payload),
+            OrganizationEventType::AllowedEmailDomainsEdited => AllowedEmailDomainsEdited::fromPayload($id, $payload),
             OrganizationEventType::MemberPolicyComplianceFailed => MemberPolicyComplianceFailed::fromPayload($id, $payload),
             OrganizationEventType::MemberPolicyComplianceRestored => MemberPolicyComplianceRestored::fromPayload($id, $payload),
             // Invitation-stream events belong to the Invitation aggregate and never appear in an org's

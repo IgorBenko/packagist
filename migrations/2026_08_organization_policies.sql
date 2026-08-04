@@ -17,6 +17,7 @@ CREATE TABLE organization_policy (
     orgId BINARY(16) NOT NULL,
     enforceTwoFactor TINYINT(1) NOT NULL DEFAULT 0,
     updatedAt DATETIME NOT NULL,
+    allowedEmailDomains JSON NOT NULL,
     PRIMARY KEY (orgId)
 ) DEFAULT CHARACTER SET utf8mb4 ENGINE = InnoDB;
 

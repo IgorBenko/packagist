@@ -400,6 +400,25 @@ class AuditRecord
     }
 
     /**
+     * The domains are public: they describe the org, not a person, unlike the policies a suspension names.
+     *
+     * @param list<string> $domains the resulting set, empty when the requirement was cleared
+     */
+    public static function organizationAllowedEmailDomainsEdited(Ulid $organizationId, string $slug, string $displayName, array $domains, ?User $actor): self
+    {
+        return new self(
+            $domains === [] ? AuditRecordType::OrganizationAllowedEmailDomainsCleared : AuditRecordType::OrganizationAllowedEmailDomainsSet,
+            [
+                'organization' => new OrganizationDisplay((string) $organizationId, $slug, $displayName)->toRecord(),
+                'domains' => $domains,
+                'actor' => self::getUserData($actor),
+            ],
+            $actor?->getId(),
+            organizationId: $organizationId,
+        );
+    }
+
+    /**
      * A member's access was suspended for failing an active org policy, or restored once they satisfied it
      * again. Which policy they failed is deliberately absent: publishing it would tell everyone which
      * security control that member is missing. Org members see the reason on the members list instead.

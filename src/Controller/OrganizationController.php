@@ -43,6 +43,7 @@ use App\Form\Type\RemoveTeamMemberType;
 use App\Form\Type\ResendInvitationType;
 use App\Form\Type\RevokeInvitationType;
 use App\Form\Type\TeamType;
+use App\Organization\Domain\AllowedEmailDomains;
 use App\Organization\Domain\Exception\OrganizationException;
 use App\Organization\Domain\Organization as OrganizationDomain;
 use App\Organization\Domain\Slug;
@@ -105,12 +106,19 @@ class OrganizationController extends Controller
     {
         // Null for a packagist-admin viewing an org they do not belong to; they have nothing to comply with.
         $member = $this->organizationMemberRepo->findOneByOrgAndUser($organization->id, $user->getId());
+        $unmetPolicies = $member !== null ? $member->suspendedPolicies : UnmetPolicies::none();
+
+        // A suspended member keeps this route so they can be told what to fix, but the overview is not what
+        // they need: they get a page of their own.
+        if (!$unmetPolicies->isEmpty()) {
+            return $this->render('organization/suspended.html.twig', [
+                'organization' => $organization,
+                'remediations' => $this->organizationPolicyRepo->policiesFor($organization->id)->remediationsFor($unmetPolicies),
+            ]);
+        }
 
         return $this->render('organization/show.html.twig', [
             'organization' => $organization,
-            // A suspended member keeps this page precisely so they can be told everything they have to fix;
-            // the voter has already verified them by the time this runs.
-            'unmetPolicies' => $member !== null ? $member->suspendedPolicies : UnmetPolicies::none(),
         ]);
     }
 
@@ -156,8 +164,11 @@ class OrganizationController extends Controller
     #[Route(path: '/organizations/{organization}/policies', name: 'organization_policies', methods: ['GET', 'POST'], requirements: ['organization' => Slug::PATTERN])]
     public function policies(Request $request, Organization $organization, #[CurrentUser] User $user): Response
     {
+        $policies = $this->organizationPolicyRepo->policiesFor($organization->id);
+
         $policyRequest = new OrganizationPolicyRequest();
-        $policyRequest->enforceTwoFactor = $this->organizationPolicyRepo->policiesFor($organization->id)->enforceTwoFactor;
+        $policyRequest->enforceTwoFactor = $policies->enforceTwoFactor;
+        $policyRequest->allowedEmailDomains = $policies->allowedEmailDomains->toInput();
 
         $form = $this->createForm(OrganizationPolicyType::class, $policyRequest);
         $form->handleRequest($request);
@@ -166,10 +177,18 @@ class OrganizationController extends Controller
             $this->denyAccessUnlessGranted(OrganizationActions::EditPolicies->value, $organization);
 
             try {
+                // One command per policy, each a no-op when unchanged, so saving the page records only what
+                // actually changed.
                 $this->policyManager->setTwoFactorEnforcement(
                     $organization,
                     $user,
                     $policyRequest->enforceTwoFactor,
+                    $request->getClientIp(),
+                );
+                $this->policyManager->setAllowedEmailDomains(
+                    $organization,
+                    $user,
+                    AllowedEmailDomains::fromList($policyRequest->allowedEmailDomains),
                     $request->getClientIp(),
                 );
 

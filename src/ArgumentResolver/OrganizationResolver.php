@@ -28,6 +28,9 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  */
 final readonly class OrganizationResolver implements ValueResolverInterface
 {
+    /** Where the resolved organization is left for collaborators outside the controller, e.g. the menu. */
+    public const string REQUEST_ATTRIBUTE = '_organization';
+
     public function __construct(
         private OrganizationRepository $organizationRepo,
         private SlugReservationRepository $slugReservationRepo,
@@ -62,6 +65,10 @@ final readonly class OrganizationResolver implements ValueResolverInterface
         if ($organization->isDeleted() && !$this->security->isGranted('ROLE_ADMIN_ORGS')) {
             throw new GoneHttpException('This organization was deleted.');
         }
+
+        // The navigation asks the voter what this member may open, which needs the entity rather than the
+        // slug. Handing it over saves loading the org twice.
+        $request->attributes->set(self::REQUEST_ATTRIBUTE, $organization);
 
         return [$organization];
     }

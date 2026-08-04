@@ -80,6 +80,8 @@ enum AuditRecordType: string
     // is never published: it would tell everyone which security control that member is missing.
     case OrganizationTwoFactorEnforcementEnabled = 'organization_two_factor_enforcement_enabled';
     case OrganizationTwoFactorEnforcementDisabled = 'organization_two_factor_enforcement_disabled';
+    case OrganizationAllowedEmailDomainsSet = 'organization_allowed_email_domains_set';
+    case OrganizationAllowedEmailDomainsCleared = 'organization_allowed_email_domains_cleared';
     case OrganizationMemberAccessSuspended = 'organization_member_access_suspended';
     case OrganizationMemberAccessRestored = 'organization_member_access_restored';
 
@@ -124,6 +126,7 @@ enum AuditRecordType: string
             self::OrganizationMemberJoined,
             self::OrganizationMemberRemoved, self::OrganizationMemberLeft,
             self::OrganizationTwoFactorEnforcementEnabled, self::OrganizationTwoFactorEnforcementDisabled,
+            self::OrganizationAllowedEmailDomainsSet, self::OrganizationAllowedEmailDomainsCleared,
             self::OrganizationMemberAccessSuspended, self::OrganizationMemberAccessRestored,
             self::OrganizationInvitationSent, self::OrganizationInvitationResent,
             self::OrganizationInvitationRevoked, self::OrganizationInvitationAccepted,

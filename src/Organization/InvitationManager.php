@@ -153,8 +153,12 @@ final class InvitationManager
             $user->getId(),
             $organization->isOrgMember($user->getId()),
             $acceptedTeamIds,
-            $organization->policies()->unmetBy(
-                $this->policyFacts->forUser($user)->withOwnership($ownersAmongTeams),
+            // Ownership comes from the teams they are about to join, not from a membership they do not have
+            // yet.
+            $organization->policies()->remediationsFor(
+                $organization->policies()->unmetBy(
+                    $this->policyFacts->forUser($user)->withOwnership($ownersAmongTeams),
+                ),
             ),
             $now,
         );

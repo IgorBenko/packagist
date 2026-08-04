@@ -114,10 +114,11 @@ final class Invitation extends AbstractAggregate
 
     /**
      * The invitee accepts. The caller has validated the link token, resolved which target teams still exist
-     * ($acceptedTeamIds) and evaluated the org's policies against the joiner ($unmetPolicies), including the
-     * ownership those teams would give them.
+     * and evaluated the org's policies against the joiner, including the ownership those teams would give
+     * them.
      *
-     * @param list<Ulid> $acceptedTeamIds the still-existing target teams the user will join
+     * @param list<Ulid>              $acceptedTeamIds    the still-existing target teams the user will join
+     * @param list<PolicyRemediation> $unmetRemediations  what the joiner must do before they may accept
      *
      * @throws InvitationNotPendingException
      * @throws NoPendingInvitationException the invitation has lapsed
@@ -125,7 +126,7 @@ final class Invitation extends AbstractAggregate
      * @throws TeamNotFoundException         none of the target teams exist any more
      * @throws PolicyNotMetException         the org's policies are unmet, 2FA for a would-be owner among them
      */
-    public function accept(int $userId, bool $alreadyMember, array $acceptedTeamIds, UnmetPolicies $unmetPolicies, \DateTimeImmutable $now): void
+    public function accept(int $userId, bool $alreadyMember, array $acceptedTeamIds, array $unmetRemediations, \DateTimeImmutable $now): void
     {
         if (!$this->status->isPending()) {
             throw new InvitationNotPendingException('This invitation is no longer pending.');
@@ -149,10 +150,10 @@ final class Invitation extends AbstractAggregate
         //
         // 2FA for a would-be owner is one of these rather than a check of its own: the joiner's ownership is
         // a fact the caller resolves from the invited teams, and OrganizationPolicies decides what it means.
-        if (!$unmetPolicies->isEmpty()) {
+        if ($unmetRemediations !== []) {
             throw new PolicyNotMetException('This invitation cannot be accepted yet: '.implode(' ', array_map(
-                static fn (PolicyComplianceReason $reason): string => $reason->remediation(),
-                $unmetPolicies->reasons,
+                static fn (PolicyRemediation $remediation): string => $remediation->text,
+                $unmetRemediations,
             )));
         }
 
@@ -253,6 +254,7 @@ final class Invitation extends AbstractAggregate
             OrganizationEventType::UserInvitationAccepted => UserInvitationAccepted::fromPayload($id, $payload),
             OrganizationEventType::UserInvitationExpired => UserInvitationExpired::fromPayload($id, $payload),
             // The org-stream event types never appear in an invitation's history.
+            OrganizationEventType::AllowedEmailDomainsEdited,
             OrganizationEventType::OrganizationCreated,
             OrganizationEventType::OrganizationNameChanged,
             OrganizationEventType::OrganizationSlugChanged,

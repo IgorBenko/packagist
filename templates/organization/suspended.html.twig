@@ -1,0 +1,31 @@
+{% extends 'organization/layout.html.twig' %}
+
+{% block org_content %}
+    <p class="alert alert-warning">
+        <strong>Your access to this organization is suspended.</strong>
+    </p>
+
+    <p>
+        You are still a member of {{ organization.displayName }} but you cannot act for
+        the organization until you meet the policies it requires. Your access is restored automatically as
+        soon as you do, without anyone having to approve it.
+    </p>
+
+    <h4>What you need to do</h4>
+
+    <ul>
+        {% for remediation in remediations %}
+            {{ include('organization/_policy_remediation.html.twig', { remediation: remediation }) }}
+        {% endfor %}
+    </ul>
+
+    {% if is_granted(enum('App\\Security\\Voter\\OrganizationActions').Leave.value, organization) %}
+        <h4>Or leave the organization</h4>
+
+        <p>
+            If you would rather not meet these requirements, you can
+            <a href="{{ path('organization_member_leave', { organization: organization.slug }) }}">leave {{ organization.displayName }}</a>
+            instead. Your account and your own packages are unaffected.
+        </p>
+    {% endif %}
+{% endblock %}
