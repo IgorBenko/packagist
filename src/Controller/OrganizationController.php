@@ -46,6 +46,7 @@ use App\Form\Type\TeamType;
 use App\Organization\Domain\Exception\OrganizationException;
 use App\Organization\Domain\Organization as OrganizationDomain;
 use App\Organization\Domain\Slug;
+use App\Organization\Domain\UnmetPolicies;
 use App\Organization\InvitationManager;
 use App\Organization\OrganizationManager;
 use App\Organization\OrganizationMembershipManager;
@@ -102,11 +103,14 @@ class OrganizationController extends Controller
     #[Route(path: '/organizations/{organization}', name: 'organization_show', methods: ['GET'], requirements: ['organization' => Slug::PATTERN])]
     public function show(Organization $organization, #[CurrentUser] User $user): Response
     {
+        // Null for a packagist-admin viewing an org they do not belong to; they have nothing to comply with.
+        $member = $this->organizationMemberRepo->findOneByOrgAndUser($organization->id, $user->getId());
+
         return $this->render('organization/show.html.twig', [
             'organization' => $organization,
-            // A suspended member keeps this page precisely so they can be told what to fix; the voter
-            // has already verified them by the time this runs.
-            'suspendedReason' => $this->organizationMemberRepo->findOneByOrgAndUser($organization->id, $user->getId())?->suspendedReason,
+            // A suspended member keeps this page precisely so they can be told everything they have to fix;
+            // the voter has already verified them by the time this runs.
+            'unmetPolicies' => $member !== null ? $member->suspendedPolicies : UnmetPolicies::none(),
         ]);
     }
 
@@ -469,7 +473,7 @@ class OrganizationController extends Controller
                 'user' => $usersById[$userId] ?? null,
                 'userId' => $userId,
                 'teams' => $teams,
-                'suspendedReason' => $memberRows[$userId]->suspendedReason ?? null,
+                'suspendedPolicies' => $memberRows[$userId]->suspendedPolicies ?? UnmetPolicies::none(),
             ];
         }
 

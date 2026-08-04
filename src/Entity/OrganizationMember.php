@@ -12,7 +12,7 @@
 
 namespace App\Entity;
 
-use App\Organization\Domain\PolicyComplianceReason;
+use App\Organization\Domain\UnmetPolicies;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Uid\Ulid;
 
@@ -44,14 +44,19 @@ class OrganizationMember
 
         /**
          * Whether the member fails an active org policy. Their membership and teams are untouched; only
-         * their ability to act for the org is inert until they comply again.
+         * their ability to act for the org is inert until they comply again. Denormalised from the policy
+         * set so counting suspended members stays a single indexed lookup.
          */
         #[ORM\Column]
         public bool $suspended = false,
 
-        /** The policy they fail, or null when they are not suspended. */
-        #[ORM\Column(length: 32, nullable: true)]
-        public ?PolicyComplianceReason $suspendedReason = null,
+        /**
+         * Every policy they fail, empty when they are not suspended. The full set is stored so a suspended
+         * member can be shown all of it at once, and so clearing one policy restores only the members who
+         * failed nothing else.
+         */
+        #[ORM\Column(type: 'unmet_policies')]
+        public UnmetPolicies $suspendedPolicies = new UnmetPolicies(),
     ) {
     }
 }

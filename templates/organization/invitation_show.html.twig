@@ -27,11 +27,13 @@
                 Please <a href="{{ path('user_2fa_configure', { name: app.user.username }) }}">enable two-factor authentication</a>,
                 then return to this page to accept.
             </div>
-        {% elseif unmetPolicy %}
+        {% elseif unmetPolicies.reasons %}
             <div class="alert alert-warning">
                 <strong>{{ organization.displayName }} requires the following before you can join:</strong>
                 <ul>
-                    {{ include('organization/_policy_remediation.html.twig', { reason: unmetPolicy }) }}
+                    {% for reason in unmetPolicies.reasons %}
+                        {{ include('organization/_policy_remediation.html.twig', { reason: reason }) }}
+                    {% endfor %}
                 </ul>
                 This invitation stays valid in the meantime: come back to this page and accept once you are done.
             </div>

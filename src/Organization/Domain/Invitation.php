@@ -122,9 +122,9 @@ final class Invitation extends AbstractAggregate
      * @throws NoPendingInvitationException the invitation has lapsed
      * @throws AlreadyMemberException        the invitee already belongs to the organization
      * @throws TeamNotFoundException         none of the target teams exist any more
-     * @throws PolicyNotMetException         joining owners requires 2FA, or an active org policy is unmet
+     * @throws PolicyNotMetException         joining owners requires 2FA, or the org's policies are unmet
      */
-    public function accept(int $userId, bool $alreadyMember, array $acceptedTeamIds, bool $ownersAmongTeams, bool $hasTwoFactor, ?PolicyComplianceReason $unmetPolicy, \DateTimeImmutable $now): void
+    public function accept(int $userId, bool $alreadyMember, array $acceptedTeamIds, bool $ownersAmongTeams, bool $hasTwoFactor, UnmetPolicies $unmetPolicies, \DateTimeImmutable $now): void
     {
         if (!$this->status->isPending()) {
             throw new InvitationNotPendingException('This invitation is no longer pending.');
@@ -146,10 +146,14 @@ final class Invitation extends AbstractAggregate
             throw new PolicyNotMetException('You must enable two-factor authentication before becoming an owner.');
         }
 
-        // An invitee who cannot meet a policy simply cannot accept yet: the invitation stays pending while
-        // they sort it out, and the same link works once they have.
-        if ($unmetPolicy !== null) {
-            throw new PolicyNotMetException($unmetPolicy->remediation().' The organization requires it of every member.');
+        // An invitee who cannot meet the policies simply cannot accept yet: the invitation stays pending
+        // while they sort them out, and the same link works once they have. Every unmet policy is named, so
+        // fixing one does not send them back to find the next.
+        if (!$unmetPolicies->isEmpty()) {
+            throw new PolicyNotMetException('The organization requires this of every member: '.implode(' ', array_map(
+                static fn (PolicyComplianceReason $reason): string => $reason->remediation(),
+                $unmetPolicies->reasons,
+            )));
         }
 
         $this->record(new UserInvitationAccepted($this->id, $this->email, $userId, $acceptedTeamIds));

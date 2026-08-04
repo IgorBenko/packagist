@@ -59,9 +59,9 @@ class OrganizationInvitationController extends Controller
             'token' => $token,
             'alreadyMember' => $this->organizationMemberRepo->findOneByOrgAndUser($organization->id, $user->getId()) !== null,
             'needsTwoFactor' => $targetsOwners && !$user->isTotpAuthenticationEnabled(),
-            // An org policy the invitee does not satisfy yet. The invitation stays pending while they sort
-            // it out, so show it as a checklist instead of letting them run into a failing accept.
-            'unmetPolicy' => $this->organizationPolicyRepo->policiesFor($organization->id)->unmetBy($this->policyFacts->forUser($user)),
+            // The org policies the invitee does not satisfy yet. The invitation stays pending while they sort
+            // them out, so show them as a checklist instead of letting them run into a failing accept.
+            'unmetPolicies' => $this->organizationPolicyRepo->policiesFor($organization->id)->unmetBy($this->policyFacts->forUser($user)),
             'acceptForm' => $this->createForm(InvitationConfirmType::class)->createView(),
             'declineForm' => $this->createForm(InvitationConfirmType::class)->createView(),
         ]);
