@@ -14,6 +14,8 @@ namespace App\Organization;
 
 use App\Entity\Organization as OrganizationReadModel;
 use App\Entity\User;
+use App\Organization\Domain\AllowedEmailDomains;
+use App\Organization\Domain\Exception\EmailDomainMismatchException;
 use App\Organization\Domain\Exception\TwoFactorRequiredException;
 use App\Organization\Domain\Organization;
 use App\Organization\EventStore\EventStore;
@@ -47,6 +49,25 @@ final class OrganizationPolicyManager
         $aggregate->setTwoFactorEnforcement(
             $enforced,
             $actor->isTotpAuthenticationEnabled(),
+            $this->facts->forUserIds($aggregate->members()),
+        );
+
+        $this->eventStore->append($aggregate, $this->actorResolver->resolve($aggregate, $actor), $ip);
+    }
+
+    /**
+     * @throws EmailDomainMismatchException the actor's own address is not on one of the domains
+     */
+    public function setAllowedEmailDomains(OrganizationReadModel $organization, User $actor, AllowedEmailDomains $domains, ?string $ip): void
+    {
+        $aggregate = Organization::reconstitute(
+            $organization->id,
+            $this->eventStore->loadHistory($organization->id),
+        );
+
+        $aggregate->setAllowedEmailDomains(
+            $domains,
+            $this->facts->forUser($actor)->emailDomain,
             $this->facts->forUserIds($aggregate->members()),
         );
 

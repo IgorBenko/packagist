@@ -24,6 +24,8 @@ final readonly class MemberPolicyFacts
         public bool $hasTwoFactor,
         /** Whether they are in the `owners` team, which carries requirements of its own. */
         public bool $isOwner = false,
+        /** Lowercased domain of their account email. Null is treated as unmet, never as a pass. */
+        public ?string $emailDomain = null,
     ) {
     }
 
@@ -34,6 +36,6 @@ final readonly class MemberPolicyFacts
      */
     public function withOwnership(bool $isOwner): self
     {
-        return new self($this->userId, $this->hasTwoFactor, $isOwner);
+        return new self($this->userId, $this->hasTwoFactor, $isOwner, $this->emailDomain);
     }
 }

@@ -51,6 +51,7 @@ class OrganizationInvitationController extends Controller
     #[Route(path: '/organizations/{organization}/invitations/{invitation}/{token}', name: 'organization_invitation_show', methods: ['GET'], requirements: ['organization' => Slug::PATTERN, 'invitation' => Requirement::ULID, 'token' => '[a-f0-9]{64}'])]
     public function show(Organization $organization, OrganizationInvitation $invitation, string $token, #[CurrentUser] User $user): Response
     {
+        $policies = $this->organizationPolicyRepo->policiesFor($organization->id);
         $targetsOwners = \in_array($organization->ownersTeamId->toRfc4122(), $invitation->teamIds, true);
 
         return $this->render('organization/invitation_show.html.twig', [
@@ -60,11 +61,10 @@ class OrganizationInvitationController extends Controller
             'alreadyMember' => $this->organizationMemberRepo->findOneByOrgAndUser($organization->id, $user->getId()) !== null,
             // Only for the wording; that owners owe 2FA comes out of unmetBy() via the ownership fact.
             'targetsOwners' => $targetsOwners,
-            // The org policies the invitee does not satisfy yet, resolved the same way the accept itself
-            // resolves them. The invitation stays pending while they sort them out, so show them as a
-            // checklist instead of letting them run into a failing accept.
-            'unmetPolicies' => $this->organizationPolicyRepo->policiesFor($organization->id)->unmetBy(
-                $this->policyFacts->forUser($user)->withOwnership($targetsOwners),
+            // Resolved the same way the accept itself resolves it, so the checklist matches what would
+            // refuse them.
+            'remediations' => $policies->remediationsFor(
+                $policies->unmetBy($this->policyFacts->forUser($user)->withOwnership($targetsOwners)),
             ),
             'acceptForm' => $this->createForm(InvitationConfirmType::class)->createView(),
             'declineForm' => $this->createForm(InvitationConfirmType::class)->createView(),

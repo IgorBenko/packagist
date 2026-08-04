@@ -12,6 +12,7 @@
 
 namespace App\Entity;
 
+use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Uid\Ulid;
 
@@ -38,6 +39,15 @@ class OrganizationPolicy
 
         #[ORM\Column(type: 'datetime_immutable')]
         public \DateTimeImmutable $updatedAt,
+
+        /**
+         * The domains a member's account email may be on, empty when the policy is off.
+         * {@see OrganizationPolicyRepository::policiesFor()} is the one reader and builds the value object.
+         *
+         * @var list<string>
+         */
+        #[ORM\Column(type: Types::JSON)]
+        public array $allowedEmailDomains = [],
     ) {
     }
 }

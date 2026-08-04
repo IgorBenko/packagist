@@ -18,9 +18,12 @@ use App\Entity\OrganizationMemberRepository;
 use App\Entity\OrganizationPolicyRepository;
 use App\Entity\OrganizationRepository;
 use App\Entity\User;
+use App\Organization\Domain\AllowedEmailDomains;
+use App\Organization\Domain\Exception\EmailDomainMismatchException;
 use App\Organization\Domain\Exception\TwoFactorRequiredException;
 use App\Organization\Domain\Organization;
 use App\Organization\Domain\PolicyComplianceReason;
+use App\Organization\Domain\PolicyRemediation;
 use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\EventStore;
 use App\Organization\OrganizationManager;
@@ -243,6 +246,102 @@ class OrganizationPolicyTest extends IntegrationTestCase
         self::assertSame(0, $this->members()->countSuspended($organization->id));
     }
 
+    public function testRequiringAnEmailDomainSuspendsTheMembersElsewhere(): void
+    {
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+        $outsideMember = $this->persistUser('elsewhere', withTwoFactor: true, email: 'elsewhere@other.org');
+        $this->joinExistingUser($organization, $outsideMember);
+
+        $this->policyManager()->setAllowedEmailDomains($organization, $owner, new AllowedEmailDomains('example.org'), null);
+
+        // The owner is on example.org and is untouched; the member on another domain is suspended.
+        $ownerRow = $this->members()->findOneByOrgAndUser($organization->id, $owner->getId());
+        self::assertNotNull($ownerRow);
+        self::assertTrue($ownerRow->suspendedPolicies->isEmpty());
+
+        $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $outsideMember->getId());
+        self::assertNotNull($memberRow);
+        self::assertSame([PolicyComplianceReason::EmailDomain], $memberRow->suspendedPolicies->reasons);
+
+        self::assertSame(1, $this->auditCount($organization, 'organization_allowed_email_domains_set'));
+        self::assertSame(['example.org'], $this->auditAttributes($organization, 'organization_allowed_email_domains_set')['domains']);
+    }
+
+    public function testAMemberOnAnyOfTheRequiredDomainsComplies(): void
+    {
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+        $member = $this->persistUser('brand', withTwoFactor: true, email: 'brand@acme.io');
+        $this->joinExistingUser($organization, $member);
+
+        $this->policyManager()->setAllowedEmailDomains($organization, $owner, new AllowedEmailDomains('example.org', 'acme.io'), null);
+
+        self::assertTrue($this->enforcer()->enforce($organization, $member)->isEmpty());
+        self::assertSame(0, $this->members()->countSuspended($organization->id));
+    }
+
+    public function testAnOwnerCannotRequireADomainTheyAreNotOn(): void
+    {
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+
+        // This would suspend the owner from their own org, so it is refused before anything is recorded.
+        $this->expectException(EmailDomainMismatchException::class);
+        $this->policyManager()->setAllowedEmailDomains($organization, $owner, new AllowedEmailDomains('acme.io'), null);
+    }
+
+    public function testClearingTheDomainRequirementRestoresTheMembersItSuspended(): void
+    {
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+        $member = $this->persistUser('elsewhere', withTwoFactor: true, email: 'elsewhere@other.org');
+        $this->joinExistingUser($organization, $member);
+
+        $this->policyManager()->setAllowedEmailDomains($organization, $owner, new AllowedEmailDomains('example.org'), null);
+        $this->policyManager()->setAllowedEmailDomains($organization, $owner, AllowedEmailDomains::none(), null);
+
+        $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $member->getId());
+        self::assertNotNull($memberRow);
+        self::assertTrue($memberRow->suspendedPolicies->isEmpty());
+        self::assertSame(1, $this->auditCount($organization, 'organization_allowed_email_domains_cleared'));
+    }
+
+    /** The case the set exists for: two active policies, both unmet, both reported at once. */
+    public function testAMemberCanFailTwoPoliciesAtOnce(): void
+    {
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+        $member = $this->persistUser('elsewhere', withTwoFactor: false, email: 'elsewhere@other.org');
+        $this->joinExistingUser($organization, $member);
+
+        $this->policyManager()->setTwoFactorEnforcement($organization, $owner, true, null);
+        $this->policyManager()->setAllowedEmailDomains($organization, $owner, new AllowedEmailDomains('example.org'), null);
+
+        $unmet = $this->enforcer()->enforce($organization, $member);
+        self::assertSame(
+            [PolicyComplianceReason::TwoFactor, PolicyComplianceReason::EmailDomain],
+            $unmet->reasons,
+        );
+        // Neither policy alone can name the remedy, so the denial falls back to the suspension itself.
+        self::assertNull($unmet->sole());
+
+        // Both remediations are offered together, the domain one naming the domain.
+        $remediations = $this->policies()->policiesFor($organization->id)->remediationsFor($unmet);
+        self::assertSame(
+            ['Enable two-factor authentication on your account.', 'Use an account email address on example.org.'],
+            array_map(static fn (PolicyRemediation $remediation): string => $remediation->text, $remediations),
+        );
+
+        // And the read model carries the whole set, so the members list and the audit record do too.
+        $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $member->getId());
+        self::assertNotNull($memberRow);
+        self::assertSame(
+            [PolicyComplianceReason::TwoFactor, PolicyComplianceReason::EmailDomain],
+            $memberRow->suspendedPolicies->reasons,
+        );
+    }
+
     private function createOrg(User $owner): OrganizationReadModel
     {
         static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);
@@ -267,6 +366,19 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $eventStore->append($aggregate, Actor::member($user), null);
 
         return $user;
+    }
+
+    /**
+     * Join an already-persisted user, the way the invitation flow would: MemberJoined on the org stream plus
+     * the all-members team placement.
+     */
+    private function joinExistingUser(OrganizationReadModel $organization, User $user): void
+    {
+        $eventStore = static::getService(EventStore::class);
+
+        $aggregate = Organization::reconstitute($organization->id, $eventStore->loadHistory($organization->id));
+        $aggregate->joinViaInvitation($user->getId(), [$organization->allMembersTeamId], new Ulid());
+        $eventStore->append($aggregate, Actor::member($user), null);
     }
 
     private function auditCount(OrganizationReadModel $organization, string $type): int
@@ -318,14 +430,16 @@ class OrganizationPolicyTest extends IntegrationTestCase
         return static::getService(OrganizationPolicyEnforcer::class);
     }
 
-    private function persistUser(string $username, bool $withTwoFactor): User
+    private function persistUser(string $username, bool $withTwoFactor, ?string $email = null): User
     {
+        $email ??= $username.'@example.org';
+
         $user = new User();
         $user->setEnabled(true);
         $user->setUsername($username);
         $user->setUsernameCanonical($username);
-        $user->setEmail($username.'@example.org');
-        $user->setEmailCanonical($username.'@example.org');
+        $user->setEmail($email);
+        $user->setEmailCanonical($email);
         $user->setPassword('testtest');
         if ($withTwoFactor) {
             $user->setTotpSecret('totp-secret');
