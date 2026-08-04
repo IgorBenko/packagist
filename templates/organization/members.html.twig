@@ -27,8 +27,8 @@
                 <tr>
                     <td>
                         {{ member.user ? member.user.username : '(unknown user #' ~ member.userId ~ ')' }}
-                        {% if member.suspendedReason %}
-                            <span class="label label-danger" title="{{ member.suspendedReason.remediation }}">suspended</span>
+                        {% if member.suspendedPolicies.reasons %}
+                            <span class="label label-danger" title="{{ member.suspendedPolicies.reasons|map(reason => reason.remediation)|join(' ') }}">suspended</span>
                         {% endif %}
                     </td>
                     <td class="team-labels">

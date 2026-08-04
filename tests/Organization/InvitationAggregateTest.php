@@ -24,6 +24,7 @@ use App\Organization\Domain\Exception\PolicyNotMetException;
 use App\Organization\Domain\Exception\TeamNotFoundException;
 use App\Organization\Domain\Invitation;
 use App\Organization\Domain\InvitationStatus;
+use App\Organization\Domain\UnmetPolicies;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Uid\Ulid;
 
@@ -54,7 +55,7 @@ class InvitationAggregateTest extends TestCase
         $teamId = new Ulid();
         $invitation = $this->pendingInvitation([$teamId]);
 
-        $invitation->accept(42, false, [$teamId], false, false, null, $this->now());
+        $invitation->accept(42, false, [$teamId], false, false, UnmetPolicies::none(), $this->now());
 
         $events = $invitation->pullPendingEvents();
         self::assertCount(1, $events);
@@ -70,7 +71,7 @@ class InvitationAggregateTest extends TestCase
 
         // alreadyMember = true: an existing member has nothing to accept and is not re-joined.
         $this->expectException(AlreadyMemberException::class);
-        $invitation->accept(42, true, [$teamId], false, true, null, $this->now());
+        $invitation->accept(42, true, [$teamId], false, true, UnmetPolicies::none(), $this->now());
     }
 
     public function testAcceptToOwnersRequiresTwoFactor(): void
@@ -80,7 +81,7 @@ class InvitationAggregateTest extends TestCase
 
         $this->expectException(PolicyNotMetException::class);
         // ownersAmongTeams = true, hasTwoFactor = false
-        $invitation->accept(42, false, [$teamId], true, false, null, $this->now());
+        $invitation->accept(42, false, [$teamId], true, false, UnmetPolicies::none(), $this->now());
     }
 
     public function testAcceptFailsWhenNoTargetTeamRemains(): void
@@ -88,7 +89,7 @@ class InvitationAggregateTest extends TestCase
         $invitation = $this->pendingInvitation([new Ulid()]);
 
         $this->expectException(TeamNotFoundException::class);
-        $invitation->accept(42, false, [], false, true, null, $this->now());
+        $invitation->accept(42, false, [], false, true, UnmetPolicies::none(), $this->now());
     }
 
     public function testAcceptFailsForExpiredInvitation(): void
@@ -98,7 +99,7 @@ class InvitationAggregateTest extends TestCase
         $invitation->pullPendingEvents();
 
         $this->expectException(NoPendingInvitationException::class);
-        $invitation->accept(42, false, [$teamId], false, true, null, $this->now());
+        $invitation->accept(42, false, [$teamId], false, true, UnmetPolicies::none(), $this->now());
     }
 
     public function testDeclineRecordsDecline(): void
@@ -128,7 +129,7 @@ class InvitationAggregateTest extends TestCase
     {
         $teamId = new Ulid();
         $invitation = $this->pendingInvitation([$teamId]);
-        $invitation->accept(42, false, [$teamId], false, true, null, $this->now());
+        $invitation->accept(42, false, [$teamId], false, true, UnmetPolicies::none(), $this->now());
         $invitation->pullPendingEvents();
 
         $invitation->revoke($this->now());

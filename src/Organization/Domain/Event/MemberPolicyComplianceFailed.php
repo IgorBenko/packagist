@@ -12,14 +12,16 @@
 
 namespace App\Organization\Domain\Event;
 
-use App\Organization\Domain\PolicyComplianceReason;
+use App\Organization\Domain\UnmetPolicies;
 use App\Organization\EventStore\DomainEvent;
 use App\Organization\EventStore\OrganizationEventType;
 use Symfony\Component\Uid\Ulid;
 
 /**
- * A member stopped satisfying an active organization policy, so their ability to act for the org is
+ * A member stopped satisfying the active organization policies, so their ability to act for the org is
  * suspended until {@see MemberPolicyComplianceRestored}. Their membership and their teams are untouched.
+ *
+ * Carries every policy they fail, so falling behind on a second one produces a new event with both.
  *
  * Recorded either when a policy is enabled (every member is evaluated at once, since the checks are
  * local) or by the inline verification on a member's own request. Both are automation-triggered: the
@@ -32,7 +34,7 @@ final readonly class MemberPolicyComplianceFailed implements DomainEvent
     public function __construct(
         public Ulid $organizationId,
         public int $userId,
-        public PolicyComplianceReason $reason,
+        public UnmetPolicies $unmetPolicies,
     ) {
     }
 
@@ -50,7 +52,7 @@ final readonly class MemberPolicyComplianceFailed implements DomainEvent
     {
         return [
             'userId' => $this->userId,
-            'reason' => $this->reason->value,
+            'reasons' => $this->unmetPolicies->toValues(),
         ];
     }
 
@@ -59,10 +61,13 @@ final readonly class MemberPolicyComplianceFailed implements DomainEvent
      */
     public static function fromPayload(Ulid $organizationId, array $payload): self
     {
+        // A single `reason` is the original payload shape. History is never rewritten, so both replay.
+        $reasons = $payload['reasons'] ?? (isset($payload['reason']) ? [$payload['reason']] : []);
+
         return new self(
             $organizationId,
             (int) $payload['userId'],
-            PolicyComplianceReason::from((string) $payload['reason']),
+            UnmetPolicies::fromValues(array_values(array_map(strval(...), (array) $reasons))),
         );
     }
 }

@@ -76,7 +76,7 @@ final class Organization extends AbstractAggregate
 
     private OrganizationPolicies $policies;
 
-    /** @var array<int, PolicyComplianceReason> userId => the policy that member currently fails */
+    /** @var array<int, UnmetPolicies> userId => the policies that member currently fails, absent when none */
     private array $suspendedMembers = [];
 
     protected function __construct(Ulid $id)
@@ -175,13 +175,14 @@ final class Organization extends AbstractAggregate
         // The aggregate is authoritative on ownership, so it fills that fact in rather than trusting the
         // caller, who may have resolved the rest from the read model.
         $unmet = $this->policies->unmetBy($facts->withOwnership($this->isOwner($facts->userId)));
-        $suspendedFor = $this->suspendedMembers[$facts->userId] ?? null;
+        $suspendedFor = $this->suspendedMembers[$facts->userId] ?? UnmetPolicies::none();
 
-        if ($unmet === $suspendedFor) {
+        // Set equality: falling behind on a second policy is a change, re-verifying the same verdict is not.
+        if ($unmet->equals($suspendedFor)) {
             return;
         }
 
-        $this->record($unmet !== null
+        $this->record(!$unmet->isEmpty()
             ? new MemberPolicyComplianceFailed($this->id, $facts->userId, $unmet)
             : new MemberPolicyComplianceRestored($this->id, $facts->userId));
     }
@@ -411,11 +412,11 @@ final class Organization extends AbstractAggregate
     }
 
     /**
-     * The policy this member is currently suspended for, or null when their access is intact.
+     * The policies this member is currently suspended for, empty when their access is intact.
      */
-    public function suspensionReasonFor(int $userId): ?PolicyComplianceReason
+    public function unmetPoliciesFor(int $userId): UnmetPolicies
     {
-        return $this->suspendedMembers[$userId] ?? null;
+        return $this->suspendedMembers[$userId] ?? UnmetPolicies::none();
     }
 
     private function isInTeam(Ulid $teamId, int $userId): bool
@@ -498,7 +499,7 @@ final class Organization extends AbstractAggregate
             $event instanceof MemberRemoved => $this->applyMemberGone($event->userId),
             $event instanceof MemberLeft => $this->applyMemberGone($event->userId),
             $event instanceof TwoFactorEnforcementEdited => $this->policies = $this->policies->withTwoFactorEnforcement($event->enforced),
-            $event instanceof MemberPolicyComplianceFailed => $this->suspendedMembers[$event->userId] = $event->reason,
+            $event instanceof MemberPolicyComplianceFailed => $this->suspendedMembers[$event->userId] = $event->unmetPolicies,
             $event instanceof MemberPolicyComplianceRestored => $this->applyComplianceRestored($event),
             default => throw new \LogicException('Unhandled organization event: '.$event->eventType()->value),
         };
