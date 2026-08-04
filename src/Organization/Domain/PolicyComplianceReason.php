@@ -25,10 +25,7 @@ enum PolicyComplianceReason: string
     case TwoFactor = 'two_factor';
     case EmailDomain = 'email_domain';
 
-    /**
-     * The policy named in the third person, for lines written about someone else (the audit log, the
-     * members list) where a remediation addressed to them would not fit.
-     */
+    /** Named in the third person, for lines about someone else: the audit log, the members list. */
     public function label(): string
     {
         return match ($this) {

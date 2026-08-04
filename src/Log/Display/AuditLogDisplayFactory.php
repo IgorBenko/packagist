@@ -555,8 +555,6 @@ class AuditLogDisplayFactory
 
         $reasons = [];
         foreach ($policies as $value) {
-            // tryFrom, unlike the member's current state: a policy retired since must not break rendering
-            // the history that mentions it.
             $reason = PolicyComplianceReason::tryFrom(strval($value));
             if ($reason !== null) {
                 $reasons[] = $reason;
