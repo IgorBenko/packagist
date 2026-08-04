@@ -31,4 +31,11 @@ enum PolicyComplianceReason: string
             self::TwoFactor => 'Enable two-factor authentication on your account.',
         };
     }
+
+    public function label(): string
+    {
+        return match ($this) {
+            self::TwoFactor => 'two-factor authentication',
+        };
+    }
 }

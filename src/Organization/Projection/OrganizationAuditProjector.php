@@ -79,7 +79,7 @@ final readonly class OrganizationAuditProjector implements Projector
             $member = $this->user($event->userId);
 
             $this->auditRecordRepo->insert($event instanceof MemberPolicyComplianceFailed
-                ? AuditRecord::organizationMemberAccessSuspended($event->organizationId, $org->slug, $org->displayName, $member)
+                ? AuditRecord::organizationMemberAccessSuspended($event->organizationId, $org->slug, $org->displayName, $member, $event->unmetPolicies)
                 : AuditRecord::organizationMemberAccessRestored($event->organizationId, $org->slug, $org->displayName, $member));
 
             return;

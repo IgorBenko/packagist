@@ -18,6 +18,7 @@ use App\Audit\AuditRecordType;
 use App\Audit\Display\OrganizationDisplay;
 use App\Audit\UserRegistrationMethod;
 use App\Audit\VersionDeletionReason;
+use App\Organization\Domain\UnmetPolicies;
 use Composer\Pcre\Preg;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
@@ -403,23 +404,35 @@ class AuditRecord
      * again. Which policy they failed is deliberately absent: publishing it would tell everyone which
      * security control that member is missing. Org members see the reason on the members list instead.
      */
-    public static function organizationMemberAccessSuspended(Ulid $organizationId, string $slug, string $displayName, ?User $member): self
+    /**
+     * The policies are recorded so the org's own audit log can say what a member has to fix. Whether they are
+     * rendered is {@see \App\Audit\Display\AuditLogDisplayFactory}'s call, not this record's.
+     */
+    public static function organizationMemberAccessSuspended(Ulid $organizationId, string $slug, string $displayName, ?User $member, UnmetPolicies $unmetPolicies): self
     {
-        return self::organizationMemberCompliance(AuditRecordType::OrganizationMemberAccessSuspended, $organizationId, $slug, $displayName, $member);
+        return self::organizationMemberCompliance(
+            AuditRecordType::OrganizationMemberAccessSuspended,
+            $organizationId,
+            $slug,
+            $displayName,
+            $member,
+            $unmetPolicies,
+        );
     }
 
     public static function organizationMemberAccessRestored(Ulid $organizationId, string $slug, string $displayName, ?User $member): self
     {
-        return self::organizationMemberCompliance(AuditRecordType::OrganizationMemberAccessRestored, $organizationId, $slug, $displayName, $member);
+        return self::organizationMemberCompliance(AuditRecordType::OrganizationMemberAccessRestored, $organizationId, $slug, $displayName, $member, UnmetPolicies::none());
     }
 
-    private static function organizationMemberCompliance(AuditRecordType $type, Ulid $organizationId, string $slug, string $displayName, ?User $member): self
+    private static function organizationMemberCompliance(AuditRecordType $type, Ulid $organizationId, string $slug, string $displayName, ?User $member, UnmetPolicies $unmetPolicies): self
     {
         return new self(
             $type,
             [
                 'organization' => new OrganizationDisplay((string) $organizationId, $slug, $displayName)->toRecord(),
                 'user' => self::getUserData($member),
+                'policies' => $unmetPolicies->toValues(),
                 // No human triggers a compliance transition: it falls out of verifying the member.
                 'actor' => self::getUserData(null, 'automation'),
             ],
