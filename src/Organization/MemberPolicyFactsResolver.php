@@ -30,7 +30,22 @@ final readonly class MemberPolicyFactsResolver
 
     public function forUser(User $user): MemberPolicyFacts
     {
-        return new MemberPolicyFacts($user->getId(), $user->isTotpAuthenticationEnabled());
+        return new MemberPolicyFacts(
+            $user->getId(),
+            $user->isTotpAuthenticationEnabled(),
+            emailDomain: self::emailDomain($user->getEmailCanonical()),
+        );
+    }
+
+    /** Null for an address with no domain part, which no policy accepts. */
+    private static function emailDomain(string $emailCanonical): ?string
+    {
+        $at = mb_strrpos($emailCanonical, '@');
+        if ($at === false || $at === mb_strlen($emailCanonical) - 1) {
+            return null;
+        }
+
+        return mb_strtolower(mb_substr($emailCanonical, $at + 1));
     }
 
     /**

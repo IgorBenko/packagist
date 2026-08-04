@@ -15,6 +15,7 @@ namespace App\Form\Type;
 use App\Form\Model\OrganizationPolicyRequest;
 use Symfony\Component\Form\AbstractType;
 use Symfony\Component\Form\Extension\Core\Type\CheckboxType;
+use Symfony\Component\Form\Extension\Core\Type\TextType;
 use Symfony\Component\Form\FormBuilderInterface;
 use Symfony\Component\OptionsResolver\OptionsResolver;
 
@@ -30,6 +31,13 @@ class OrganizationPolicyType extends AbstractType
                 'label' => 'Require two-factor authentication',
                 'required' => false,
                 'help' => 'Owners always need two-factor authentication, however this is set. Enabling it extends the same requirement to every other member: those without it are suspended as soon as you save, keeping their membership and teams but unable to act for the organization until they enable it.',
+            ])
+            ->add('allowedEmailDomains', TextType::class, [
+                'label' => 'Required email address domains',
+                'required' => false,
+                'empty_data' => '',
+                'attr' => ['placeholder' => 'acme.com, acme.org'],
+                'help' => 'Separate several domains with commas; a member on any one of them satisfies the requirement. Members whose account email is on another domain are suspended as soon as you save. Leave empty to accept any address. Your own account email must be on one of the domains you require.',
             ]);
     }
 

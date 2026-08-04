@@ -29,6 +29,7 @@ use App\Log\Display\Event\GenericUserDisplay;
 use App\Log\Display\Event\GitHubLinkedWithUserDisplay;
 use App\Log\Display\Event\MaintainerAddedDisplay;
 use App\Log\Display\Event\MaintainerRemovedDisplay;
+use App\Log\Display\Event\OrganizationAllowedEmailDomainsDisplay;
 use App\Log\Display\Event\OrganizationCreatedDisplay;
 use App\Log\Display\Event\OrganizationInvitationDisplay;
 use App\Log\Display\Event\OrganizationMemberComplianceDisplay;
@@ -484,6 +485,15 @@ class AuditLogDisplayFactory
                 $record->type,
                 $record->datetime,
                 OrganizationDisplay::fromRecord($record->attributes['organization']),
+                $this->buildActor($record->attributes['actor']),
+                $record->ip,
+            ),
+            AuditLogEventType::OrganizationAllowedEmailDomainsSet,
+            AuditLogEventType::OrganizationAllowedEmailDomainsCleared => new OrganizationAllowedEmailDomainsDisplay(
+                $record->type,
+                $record->datetime,
+                OrganizationDisplay::fromRecord($record->attributes['organization']),
+                array_values(array_map(strval(...), (array) ($record->attributes['domains'] ?? []))),
                 $this->buildActor($record->attributes['actor']),
                 $record->ip,
             ),

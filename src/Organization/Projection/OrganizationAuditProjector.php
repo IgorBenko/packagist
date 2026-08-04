@@ -20,6 +20,7 @@ use App\Entity\OrganizationRepository;
 use App\Entity\OrganizationTeamRepository;
 use App\Entity\User;
 use App\Entity\UserRepository;
+use App\Organization\Domain\Event\AllowedEmailDomainsEdited;
 use App\Organization\Domain\Event\InvitationEvent;
 use App\Organization\Domain\Event\MemberJoined;
 use App\Organization\Domain\Event\MemberLeft;
@@ -117,6 +118,7 @@ final readonly class OrganizationAuditProjector implements Projector
                 $event instanceof MemberRemoved => AuditRecord::organizationMemberRemoved($event->organizationId, $org->slug, $org->displayName, $this->requireUser($event->userId), $actor),
                 $event instanceof MemberLeft => AuditRecord::organizationMemberLeft($event->organizationId, $org->slug, $org->displayName, $this->requireUser($event->userId), $actor),
                 $event instanceof TwoFactorEnforcementEdited => AuditRecord::organizationTwoFactorEnforcementEdited($event->organizationId, $org->slug, $org->displayName, $event->enforced, $actor),
+                $event instanceof AllowedEmailDomainsEdited => AuditRecord::organizationAllowedEmailDomainsEdited($event->organizationId, $org->slug, $org->displayName, $event->allowedEmailDomains->toValues(), $actor),
                 default => throw new \LogicException('Unhandled event: ' . $event->eventType()->value),
             }
         );

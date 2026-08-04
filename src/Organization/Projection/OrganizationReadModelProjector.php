@@ -28,6 +28,7 @@ use App\Entity\SlugReservationKind;
 use App\Entity\SlugReservationRepository;
 use App\Entity\User;
 use App\Entity\UserRepository;
+use App\Organization\Domain\Event\AllowedEmailDomainsEdited;
 use App\Organization\Domain\Event\InvitationEvent;
 use App\Organization\Domain\Event\MemberJoined;
 use App\Organization\Domain\Event\MemberLeft;
@@ -93,6 +94,7 @@ final readonly class OrganizationReadModelProjector implements Projector
             $event instanceof MemberRemoved => $this->memberGone($event->organizationId, $event->userId),
             $event instanceof MemberLeft => $this->memberGone($event->organizationId, $event->userId),
             $event instanceof TwoFactorEnforcementEdited => $this->twoFactorEnforcementEdited($recorded, $event),
+            $event instanceof AllowedEmailDomainsEdited => $this->allowedEmailDomainsEdited($recorded, $event),
             $event instanceof MemberPolicyComplianceFailed => $this->suspendMember($event),
             $event instanceof MemberPolicyComplianceRestored => $this->restoreMember($event),
             default => throw new \LogicException('Unhandled event: ' . $event->eventType()->value),
@@ -176,15 +178,28 @@ final readonly class OrganizationReadModelProjector implements Projector
      */
     private function twoFactorEnforcementEdited(RecordedEvent $recorded, TwoFactorEnforcementEdited $event): void
     {
-        $policy = $this->organizationPolicyRepo->findForOrg($event->organizationId);
-        if ($policy === null) {
-            $this->getEM()->persist(new OrganizationPolicy($event->organizationId, $event->enforced, $recorded->occurredAt));
-
-            return;
-        }
-
+        $policy = $this->policy($event->organizationId, $recorded);
         $policy->enforceTwoFactor = $event->enforced;
         $policy->updatedAt = $recorded->occurredAt;
+    }
+
+    private function allowedEmailDomainsEdited(RecordedEvent $recorded, AllowedEmailDomainsEdited $event): void
+    {
+        $policy = $this->policy($event->organizationId, $recorded);
+        $policy->allowedEmailDomains = $event->allowedEmailDomains->toValues();
+        $policy->updatedAt = $recorded->occurredAt;
+    }
+
+    /** Created on demand with every policy at its default, so an org that never set one simply has no row. */
+    private function policy(Ulid $organizationId, RecordedEvent $recorded): OrganizationPolicy
+    {
+        $policy = $this->organizationPolicyRepo->findForOrg($organizationId);
+        if ($policy === null) {
+            $policy = new OrganizationPolicy($organizationId, false, $recorded->occurredAt);
+            $this->getEM()->persist($policy);
+        }
+
+        return $policy;
     }
 
     private function suspendMember(MemberPolicyComplianceFailed $event): void
