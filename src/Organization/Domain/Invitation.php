@@ -113,8 +113,9 @@ final class Invitation extends AbstractAggregate
     }
 
     /**
-     * The invitee accepts. The caller has validated the link token and resolved which target teams still
-     * exist ($acceptedTeamIds) and whether the owners team is among them ($ownersAmongTeams).
+     * The invitee accepts. The caller has validated the link token, resolved which target teams still exist
+     * ($acceptedTeamIds) and evaluated the org's policies against the joiner ($unmetPolicies), including the
+     * ownership those teams would give them.
      *
      * @param list<Ulid> $acceptedTeamIds the still-existing target teams the user will join
      *
@@ -122,9 +123,9 @@ final class Invitation extends AbstractAggregate
      * @throws NoPendingInvitationException the invitation has lapsed
      * @throws AlreadyMemberException        the invitee already belongs to the organization
      * @throws TeamNotFoundException         none of the target teams exist any more
-     * @throws PolicyNotMetException         joining owners requires 2FA, or the org's policies are unmet
+     * @throws PolicyNotMetException         the org's policies are unmet, 2FA for a would-be owner among them
      */
-    public function accept(int $userId, bool $alreadyMember, array $acceptedTeamIds, bool $ownersAmongTeams, bool $hasTwoFactor, UnmetPolicies $unmetPolicies, \DateTimeImmutable $now): void
+    public function accept(int $userId, bool $alreadyMember, array $acceptedTeamIds, UnmetPolicies $unmetPolicies, \DateTimeImmutable $now): void
     {
         if (!$this->status->isPending()) {
             throw new InvitationNotPendingException('This invitation is no longer pending.');
@@ -142,15 +143,14 @@ final class Invitation extends AbstractAggregate
             throw new TeamNotFoundException('None of the invited teams exist any more.');
         }
 
-        if ($ownersAmongTeams && !$hasTwoFactor) {
-            throw new PolicyNotMetException('You must enable two-factor authentication before becoming an owner.');
-        }
-
         // An invitee who cannot meet the policies simply cannot accept yet: the invitation stays pending
         // while they sort them out, and the same link works once they have. Every unmet policy is named, so
         // fixing one does not send them back to find the next.
+        //
+        // 2FA for a would-be owner is one of these rather than a check of its own: the joiner's ownership is
+        // a fact the caller resolves from the invited teams, and OrganizationPolicies decides what it means.
         if (!$unmetPolicies->isEmpty()) {
-            throw new PolicyNotMetException('The organization requires this of every member: '.implode(' ', array_map(
+            throw new PolicyNotMetException('This invitation cannot be accepted yet: '.implode(' ', array_map(
                 static fn (PolicyComplianceReason $reason): string => $reason->remediation(),
                 $unmetPolicies->reasons,
             )));
