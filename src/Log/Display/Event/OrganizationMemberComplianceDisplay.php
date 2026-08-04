@@ -16,10 +16,12 @@ use App\Log\AuditLogEventType;
 use App\Log\Display\AbstractLogDisplay;
 use App\Log\Display\ActorDisplay;
 use App\Log\Display\OrganizationDisplay;
+use App\Organization\Domain\UnmetPolicies;
 
 /**
- * A member's access was suspended for failing an org policy, or restored once they satisfied it again.
- * Which policy is deliberately not part of the record, so neither direction renders one.
+ * A member's access was suspended for failing the org's policies, or restored once they satisfied them again.
+ * $policies is empty on the public transparency log, where the line stays generic, and for a restoration,
+ * which has nothing left to name.
  */
 readonly class OrganizationMemberComplianceDisplay extends AbstractLogDisplay
 {
@@ -28,6 +30,7 @@ readonly class OrganizationMemberComplianceDisplay extends AbstractLogDisplay
         \DateTimeImmutable $datetime,
         public OrganizationDisplay $organization,
         public ActorDisplay $member,
+        public UnmetPolicies $policies,
         ActorDisplay $actor,
         ?string $ip,
     ) {
