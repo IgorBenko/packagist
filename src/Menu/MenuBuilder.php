@@ -12,11 +12,8 @@
 
 namespace App\Menu;
 
-use App\ArgumentResolver\OrganizationResolver;
 use App\Controller\AdminController;
-use App\Entity\Organization;
 use App\Entity\User;
-use App\Security\Voter\OrganizationActions;
 use Knp\Menu\FactoryInterface;
 use Knp\Menu\ItemInterface;
 use Symfony\Bundle\SecurityBundle\Security;
@@ -115,33 +112,29 @@ class MenuBuilder
         return $menu;
     }
 
-    /**
-     * Only the pages this viewer may open: a plain member has no business being offered Settings, and a
-     * suspended member is left with the overview alone, so the layout drops the column entirely.
-     */
     public function createOrganizationMenu(): ItemInterface
     {
         $menu = $this->factory->createItem('root');
         $menu->setChildrenAttribute('class', 'nav nav-tabs nav-stacked');
 
-        // The entity, not the slug: the voter needs the subject. Left on the request by the resolver, so it
-        // is only there on organization pages.
-        $organization = $this->requestStack->getCurrentRequest()?->attributes->get(OrganizationResolver::REQUEST_ATTRIBUTE);
-        if (!$organization instanceof Organization) {
+        $slug = $this->requestStack->getCurrentRequest()?->attributes->get('organization');
+        if (!\is_string($slug)) {
             return $menu;
         }
 
-        $slug = $organization->slug;
-
-        $this->addOrganizationChild($menu, $organization, OrganizationActions::View, 'menu.organization_overview', 'icon-chart', [
+        $menu->addChild($this->translator->trans('menu.organization_overview'), [
+            'label' => '<span class="icon-chart"></span>'.$this->translator->trans('menu.organization_overview'),
             'route' => 'organization_show',
             'routeParameters' => ['organization' => $slug],
+            'extras' => ['safe_label' => true, 'translation_domain' => false],
         ]);
-
-        $this->addOrganizationChild($menu, $organization, OrganizationActions::ViewTeams, 'menu.organization_teams', 'icon-users', [
+        $menu->addChild($this->translator->trans('menu.organization_teams'), [
+            'label' => '<span class="icon-users"></span>'.$this->translator->trans('menu.organization_teams'),
             'route' => 'organization_teams',
             'routeParameters' => ['organization' => $slug],
             'extras' => [
+                'safe_label' => true,
+                'translation_domain' => false,
                 'routes' => [
                     ['route' => 'organization_teams', 'parameters' => ['organization' => $slug]],
                     ['route' => 'organization_team_create', 'parameters' => ['organization' => $slug]],
@@ -152,11 +145,13 @@ class MenuBuilder
                 ],
             ],
         ]);
-
-        $this->addOrganizationChild($menu, $organization, OrganizationActions::ViewMembers, 'menu.organization_members', 'icon-user', [
+        $menu->addChild($this->translator->trans('menu.organization_members'), [
+            'label' => '<span class="icon-user"></span>'.$this->translator->trans('menu.organization_members'),
             'route' => 'organization_members',
             'routeParameters' => ['organization' => $slug],
             'extras' => [
+                'safe_label' => true,
+                'translation_domain' => false,
                 'routes' => [
                     ['route' => 'organization_members', 'parameters' => ['organization' => $slug]],
                     ['route' => 'organization_member_remove', 'parameters' => ['organization' => $slug]],
@@ -167,43 +162,27 @@ class MenuBuilder
                 ],
             ],
         ]);
-
-        $this->addOrganizationChild($menu, $organization, OrganizationActions::ViewPolicies, 'menu.organization_policies', 'icon-lock', [
+        $menu->addChild($this->translator->trans('menu.organization_policies'), [
+            'label' => '<span class="icon-lock"></span>'.$this->translator->trans('menu.organization_policies'),
             'route' => 'organization_policies',
             'routeParameters' => ['organization' => $slug],
+            'extras' => ['safe_label' => true, 'translation_domain' => false],
         ]);
-
-        // Settings is the edit form itself, so it is offered on the action that opens it.
-        $this->addOrganizationChild($menu, $organization, OrganizationActions::Edit, 'menu.organization_settings', 'icon-tools', [
+        $menu->addChild($this->translator->trans('menu.organization_settings'), [
+            'label' => '<span class="icon-tools"></span>'.$this->translator->trans('menu.organization_settings'),
             'route' => 'organization_settings',
             'routeParameters' => ['organization' => $slug],
+            'extras' => ['safe_label' => true, 'translation_domain' => false],
         ]);
 
-        $this->addOrganizationChild($menu, $organization, OrganizationActions::ViewAuditLog, 'menu.organization_audit_log', 'icon-back-in-time', [
+        $menu->addChild($this->translator->trans('menu.organization_audit_log'), [
+            'label' => '<span class="icon-back-in-time"></span>'.$this->translator->trans('menu.organization_audit_log'),
             'route' => 'organization_audit_log',
             'routeParameters' => ['organization' => $slug],
+            'extras' => ['safe_label' => true, 'translation_domain' => false],
         ]);
 
         return $menu;
-    }
-
-    /**
-     * Added only when the viewer may perform $action. The icon in the label is why every entry needs the same
-     * safe_label / translation_domain extras.
-     *
-     * @param array<string, mixed> $options
-     */
-    private function addOrganizationChild(ItemInterface $menu, Organization $organization, OrganizationActions $action, string $labelKey, string $icon, array $options): void
-    {
-        if (!$this->security->isGranted($action->value, $organization)) {
-            return;
-        }
-
-        $label = $this->translator->trans($labelKey);
-        $options['label'] = '<span class="'.$icon.'"></span>'.$label;
-        $options['extras'] = ($options['extras'] ?? []) + ['safe_label' => true, 'translation_domain' => false];
-
-        $menu->addChild($label, $options);
     }
 
     public function hasAdminAccess(): bool

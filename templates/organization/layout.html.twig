@@ -2,13 +2,6 @@
 
 {% block title %}{{ organization.displayName }} - {{ parent() }}{% endblock %}
 
-{#
-    The navigation holds only the pages this viewer may open (see App\Menu\MenuBuilder), so a column with a
-    single entry pointing at the current page is noise: drop it.
-#}
-{% set orgMenu = knp_menu_get('organization_menu') %}
-{% set showOrgNav = orgMenu.children|length > 1 %}
-
 {% block content %}
     <h2 class="title">
         {{ organization.displayName }}
@@ -19,13 +12,11 @@
     </h2>
 
     <section class="row">
-        {% if showOrgNav %}
-            <div class="col-md-3">
-                {{ knp_menu_render(orgMenu, {'currentClass': 'active', 'allow_safe_labels': true}) }}
-            </div>
-        {% endif %}
+        <div class="col-md-3">
+            {{ knp_menu_render('organization_menu', {'currentClass': 'active', 'allow_safe_labels': true}) }}
+        </div>
 
-        <div class="{{ showOrgNav ? 'col-md-9' : 'col-md-12' }}">
+        <div class="col-md-9">
             {% block org_content %}{% endblock %}
         </div>
     </section>

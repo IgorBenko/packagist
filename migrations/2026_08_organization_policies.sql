@@ -21,11 +21,6 @@ CREATE TABLE organization_policy (
     PRIMARY KEY (orgId)
 ) DEFAULT CHARACTER SET utf8mb4 ENGINE = InnoDB;
 
--- suspendedPolicies is the JSON array of policies that are unmet (currently only 'two_factor'), so a member
--- can be told everything they have to fix at once and so clearing one policy restores only the members who
--- failed nothing else. The empty array is the empty set. suspended is denormalised from it so counting
--- suspended members stays a single indexed lookup.
---
 -- A JSON column takes no DEFAULT, so MySQL writes the JSON literal `null` into the existing rows; the UPDATE
 -- normalises those to an empty array. Nobody is suspended at this point either way.
 ALTER TABLE organization_member
