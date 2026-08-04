@@ -23,7 +23,7 @@ enum OrganizationActions: string
     case SoftDelete = 'soft-delete';
     case Restore = 'restore';
 
-    // Team & member management — owner-only.
+    // Team & member management, owner-only.
     case ViewTeams = 'view-teams';
     case CreateTeam = 'create-team';
     case RenameTeam = 'rename-team';

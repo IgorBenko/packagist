@@ -1,8 +1,7 @@
 {#
-    One organization policy the current user does not satisfy, and where to go to fix it. Rendered once per
-    policy they fail, by both the suspension banner and the invitation checklist. The copy is built by
-    App\Organization\Domain\OrganizationPolicies::remediationsFor(), which can name the org's configured
-    values; only the link belongs here, so route names stay out of the domain.
+    One policy the current user does not satisfy, rendered once per policy by both the suspension page and the
+    invitation checklist. The copy comes from OrganizationPolicies::remediationsFor(); only the link belongs
+    here, so route names stay out of the domain.
 #}
 <li>
     {{ remediation.text }}

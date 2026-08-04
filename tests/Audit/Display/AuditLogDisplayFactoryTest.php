@@ -865,10 +865,7 @@ class AuditLogDisplayFactoryTest extends TestCase
         self::assertSame($expectedEmail, $display->email);
     }
 
-    /**
-     * Which policy a member failed says whether their account has a second factor, so the public
-     * transparency log gets the generic line and only the org's own log and auditors see the set.
-     */
+    /** Which policy someone failed says whether their account has a second factor, so the public log omits it. */
     #[TestWith([false, false, []])]
     #[TestWith([true, false, [PolicyComplianceReason::TwoFactor]])]
     #[TestWith([false, true, [PolicyComplianceReason::TwoFactor]])]
