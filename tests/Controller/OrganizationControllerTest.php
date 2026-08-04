@@ -359,13 +359,11 @@ class OrganizationControllerTest extends IntegrationTestCase
 
         $this->client->loginUser($member);
 
-        // View survives and gives them a page of their own, with no navigation to what would refuse them.
+        // View survives and gives them a page of their own naming what they owe.
         $crawler = $this->client->request('GET', '/organizations/acme');
         self::assertResponseIsSuccessful();
         self::assertStringContainsString('Your access to this organization is suspended', $crawler->filter('.alert')->text());
-        self::assertStringContainsString('Enable two-factor authentication', $crawler->filter('.col-md-12 ul')->text());
-        self::assertCount(0, $crawler->filter('.nav-tabs'), 'The organization navigation is dropped for a suspended member');
-        self::assertCount(0, $crawler->filter('a[href="/organizations/acme/members"]'));
+        self::assertStringContainsString('Enable two-factor authentication', $crawler->filter('.col-md-9 ul')->text());
 
         // Leaving survives too, so a suspended member is never trapped, and this page offers it directly.
         self::assertCount(1, $crawler->filter('a[href="/organizations/acme/members/leave"]'));

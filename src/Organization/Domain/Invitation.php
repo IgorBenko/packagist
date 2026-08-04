@@ -144,12 +144,9 @@ final class Invitation extends AbstractAggregate
             throw new TeamNotFoundException('None of the invited teams exist any more.');
         }
 
-        // An invitee who cannot meet the policies simply cannot accept yet: the invitation stays pending
-        // while they sort them out, and the same link works once they have. Every unmet policy is named, so
-        // fixing one does not send them back to find the next.
-        //
-        // 2FA for a would-be owner is one of these rather than a check of its own: the joiner's ownership is
-        // a fact the caller resolves from the invited teams, and OrganizationPolicies decides what it means.
+        // The invitation stays pending while they sort this out, and the same link works once they have.
+        // 2FA for a would-be owner is one of these rather than a check of its own, since the caller resolves
+        // ownership from the invited teams.
         if ($unmetRemediations !== []) {
             throw new PolicyNotMetException('This invitation cannot be accepted yet: '.implode(' ', array_map(
                 static fn (PolicyRemediation $remediation): string => $remediation->text,

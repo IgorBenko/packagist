@@ -46,10 +46,8 @@ final class OrganizationPolicyEnforcer
     }
 
     /**
-     * Every policy the member fails, empty when they comply (or are not a member at all).
-     *
-     * A page render consults the voter many times, so the verdict is computed once per org and user: only
-     * a genuine change of state may write to the event stream.
+     * Every policy the member fails, empty when they comply or are not a member at all. Memoized because a
+     * page render consults the voter many times and only a genuine change may write to the stream.
      */
     public function enforce(OrganizationReadModel $organization, User $user): UnmetPolicies
     {
@@ -86,10 +84,8 @@ final class OrganizationPolicyEnforcer
     }
 
     /**
-     * The verdict changed, so the state transition has to reach the event stream. Only this path pays for
-     * the aggregate; the aggregate re-derives the verdict itself, from its own view of ownership, and is
-     * the one that decides what gets recorded. Empty when it sees nothing to fix, including when it does not
-     * know the member at all.
+     * Only this path pays for the aggregate, which re-derives the verdict from its own view of ownership and
+     * decides what gets recorded. Empty when it sees nothing to fix, or does not know the member.
      */
     private function recordTransition(OrganizationReadModel $organization, User $user): UnmetPolicies
     {
