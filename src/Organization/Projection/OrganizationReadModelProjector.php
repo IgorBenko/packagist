@@ -43,6 +43,7 @@ use App\Organization\Domain\Event\TeamMemberAdded;
 use App\Organization\Domain\Event\TeamMemberRemoved;
 use App\Organization\Domain\Event\TeamRenamed;
 use App\Organization\Domain\Event\TwoFactorEnforcementEdited;
+use App\Organization\Domain\UnmetPolicies;
 use App\Organization\EventStore\RecordedEvent;
 use App\Util\DoctrineTrait;
 use Doctrine\Persistence\ManagerRegistry;
@@ -189,15 +190,16 @@ final readonly class OrganizationReadModelProjector implements Projector
     private function suspendMember(MemberPolicyComplianceFailed $event): void
     {
         $member = $this->member($event->organizationId, $event->userId);
-        $member->suspended = true;
-        $member->suspendedReason = $event->reason;
+        $member->suspendedPolicies = $event->unmetPolicies;
+        // Derived, so the flag can never claim a suspension the set does not name.
+        $member->suspended = !$member->suspendedPolicies->isEmpty();
     }
 
     private function restoreMember(MemberPolicyComplianceRestored $event): void
     {
         $member = $this->member($event->organizationId, $event->userId);
         $member->suspended = false;
-        $member->suspendedReason = null;
+        $member->suspendedPolicies = UnmetPolicies::none();
     }
 
     private function teamDeleted(TeamDeleted $event): void

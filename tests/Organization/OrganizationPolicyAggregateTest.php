@@ -46,10 +46,10 @@ class OrganizationPolicyAggregateTest extends TestCase
         // The owner has 2FA and is untouched; only the member without it is suspended.
         self::assertInstanceOf(MemberPolicyComplianceFailed::class, $events[1]);
         self::assertSame(self::MEMBER, $events[1]->userId);
-        self::assertSame(PolicyComplianceReason::TwoFactor, $events[1]->reason);
+        self::assertSame([PolicyComplianceReason::TwoFactor], $events[1]->unmetPolicies->reasons);
 
-        self::assertSame(PolicyComplianceReason::TwoFactor, $organization->suspensionReasonFor(self::MEMBER));
-        self::assertNull($organization->suspensionReasonFor(self::OWNER));
+        self::assertSame([PolicyComplianceReason::TwoFactor], $organization->unmetPoliciesFor(self::MEMBER)->reasons);
+        self::assertTrue($organization->unmetPoliciesFor(self::OWNER)->isEmpty());
     }
 
     public function testDisablingTwoFactorEnforcementRestoresTheMembersItSuspended(): void
@@ -72,7 +72,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         self::assertInstanceOf(MemberPolicyComplianceRestored::class, $events[1]);
         self::assertSame(self::MEMBER, $events[1]->userId);
 
-        self::assertNull($organization->suspensionReasonFor(self::MEMBER));
+        self::assertTrue($organization->unmetPoliciesFor(self::MEMBER)->isEmpty());
     }
 
     public function testSettingTheSameValueIsANoOp(): void
@@ -115,7 +115,7 @@ class OrganizationPolicyAggregateTest extends TestCase
 
         $events = $organization->pullPendingEvents();
         self::assertCount(1, $events);
-        self::assertNull($organization->suspensionReasonFor(self::MEMBER));
+        self::assertTrue($organization->unmetPoliciesFor(self::MEMBER)->isEmpty());
     }
 
     public function testVerifyMemberComplianceSuspendsAndRestores(): void
@@ -135,7 +135,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         $events = $organization->pullPendingEvents();
         self::assertCount(1, $events);
         self::assertInstanceOf(MemberPolicyComplianceRestored::class, $events[0]);
-        self::assertNull($organization->suspensionReasonFor(self::MEMBER));
+        self::assertTrue($organization->unmetPoliciesFor(self::MEMBER)->isEmpty());
     }
 
     public function testVerifyMemberComplianceIsIdempotent(): void
@@ -163,7 +163,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         self::assertCount(1, $events);
         self::assertInstanceOf(MemberPolicyComplianceFailed::class, $events[0]);
         self::assertSame(self::OWNER, $events[0]->userId);
-        self::assertSame(PolicyComplianceReason::TwoFactor, $events[0]->reason);
+        self::assertSame([PolicyComplianceReason::TwoFactor], $events[0]->unmetPolicies->reasons);
     }
 
     public function testPlainMemberWithoutTwoFactorIsFineWithNoPolicySet(): void
@@ -173,7 +173,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         $organization->verifyMemberCompliance(new MemberPolicyFacts(self::MEMBER, false));
 
         self::assertSame([], $organization->pullPendingEvents());
-        self::assertNull($organization->suspensionReasonFor(self::MEMBER));
+        self::assertTrue($organization->unmetPoliciesFor(self::MEMBER)->isEmpty());
     }
 
     public function testDisablingTheTwoFactorPolicyDoesNotRestoreAnOwnerWithoutTwoFactor(): void
@@ -188,7 +188,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         // ends up suspended by the same batch.
         $organization->setTwoFactorEnforcement(true, true, $facts);
         $organization->pullPendingEvents();
-        self::assertSame(PolicyComplianceReason::TwoFactor, $organization->suspensionReasonFor(self::OWNER));
+        self::assertSame([PolicyComplianceReason::TwoFactor], $organization->unmetPoliciesFor(self::OWNER)->reasons);
 
         $organization->setTwoFactorEnforcement(false, true, $facts);
 
@@ -200,8 +200,8 @@ class OrganizationPolicyAggregateTest extends TestCase
         self::assertCount(1, $restored);
         self::assertSame(self::MEMBER, $restored[0]->userId);
 
-        self::assertSame(PolicyComplianceReason::TwoFactor, $organization->suspensionReasonFor(self::OWNER));
-        self::assertNull($organization->suspensionReasonFor(self::MEMBER));
+        self::assertSame([PolicyComplianceReason::TwoFactor], $organization->unmetPoliciesFor(self::OWNER)->reasons);
+        self::assertTrue($organization->unmetPoliciesFor(self::MEMBER)->isEmpty());
     }
 
     public function testOwnerIsRestoredOnceTheyEnableTwoFactor(): void
@@ -215,7 +215,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         $events = $organization->pullPendingEvents();
         self::assertCount(1, $events);
         self::assertInstanceOf(MemberPolicyComplianceRestored::class, $events[0]);
-        self::assertNull($organization->suspensionReasonFor(self::OWNER));
+        self::assertTrue($organization->unmetPoliciesFor(self::OWNER)->isEmpty());
     }
 
     public function testVerifyMemberComplianceIgnoresNonMembers(): void
@@ -240,7 +240,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         $organization->leave(self::MEMBER);
 
         // A former member carries no compliance state, so re-joining starts clean.
-        self::assertNull($organization->suspensionReasonFor(self::MEMBER));
+        self::assertTrue($organization->unmetPoliciesFor(self::MEMBER)->isEmpty());
     }
 
     public function testPoliciesAndSuspensionsAreReplayedFromTheStream(): void
@@ -252,7 +252,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         ]);
 
         self::assertTrue($organization->policies()->enforceTwoFactor);
-        self::assertSame(PolicyComplianceReason::TwoFactor, $organization->suspensionReasonFor(self::MEMBER));
+        self::assertSame([PolicyComplianceReason::TwoFactor], $organization->unmetPoliciesFor(self::MEMBER)->reasons);
 
         // A restore later in the stream clears it again.
         $restored = Organization::reconstitute(new Ulid(), [
@@ -262,7 +262,7 @@ class OrganizationPolicyAggregateTest extends TestCase
             ['type' => OrganizationEventType::MemberPolicyComplianceRestored, 'payload' => ['userId' => self::MEMBER]],
         ]);
 
-        self::assertNull($restored->suspensionReasonFor(self::MEMBER));
+        self::assertTrue($restored->unmetPoliciesFor(self::MEMBER)->isEmpty());
     }
 
     /**

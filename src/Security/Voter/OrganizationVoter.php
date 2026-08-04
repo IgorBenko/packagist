@@ -105,10 +105,9 @@ class OrganizationVoter extends Voter
             return $standing;
         }
 
-        // Leave is the one action a suspended member keeps, so they can always walk away. It is exempted
-        // here rather than inside memberDenialReason() because the exemption is about the suspension, not
-        // about their membership.
-        if ($action === OrganizationActions::Leave) {
+        // A suspended member keeps View, which is where they are told what to fix, and Leave, so they are
+        // never trapped.
+        if (\in_array($action, [OrganizationActions::View, OrganizationActions::Leave], true)) {
             return null;
         }
 
@@ -121,14 +120,20 @@ class OrganizationVoter extends Voter
      */
     private function complianceDenialReason(Organization $organization, User $user): ?OrganizationAccessDeniedReason
     {
-        $suspension = $this->policyEnforcer->enforce($organization, $user);
-        if ($suspension === null) {
+        $unmet = $this->policyEnforcer->enforce($organization, $user);
+        if ($unmet->isEmpty()) {
             return null;
         }
 
-        // A match rather than a fallback to PolicySuspended, so that adding a policy forces a decision here
-        // about whether it can name a more specific remedy than "your access is suspended".
-        return match ($suspension) {
+        // Several failures cannot be answered with one remedy, so the listener sends them to the overview,
+        // which lists all of them.
+        $sole = $unmet->sole();
+        if ($sole === null) {
+            return OrganizationAccessDeniedReason::PolicySuspended;
+        }
+
+        // A match, so a new policy forces a decision here about whether it can name a remedy of its own.
+        return match ($sole) {
             PolicyComplianceReason::TwoFactor => OrganizationAccessDeniedReason::TwoFactorRequired,
         };
     }
