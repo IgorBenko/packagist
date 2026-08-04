@@ -235,6 +235,29 @@ class OrganizationInvitationControllerTest extends IntegrationTestCase
         );
     }
 
+    public function testInvitationToOwnersNamesTheOwnershipRequirement(): void
+    {
+        [$owner, $organization] = $this->orgWithTeam();
+        // No TOTP secret: owners owe 2FA whether or not the org set the policy, and the same checklist says so.
+        $alice = self::createUser('alice', 'alice@example.org');
+        $this->store($alice);
+
+        $ownersTeam = static::getService(OrganizationTeamRepository::class)->find($organization->ownersTeamId);
+        self::assertNotNull($ownersTeam);
+
+        $this->client->loginUser($owner);
+        $this->submitInvite($ownersTeam, 'alice@example.org');
+        $path = $this->acceptUrlPath();
+
+        $this->client->loginUser($alice);
+        $crawler = $this->client->request('GET', $path);
+
+        self::assertResponseIsSuccessful();
+        $alert = $crawler->filter('.alert-warning')->text();
+        self::assertStringContainsString('makes you an owner', $alert);
+        self::assertStringContainsString('Enable two-factor authentication', $alert);
+    }
+
     public function testInviteeCannotAcceptWhileAnOrgPolicyIsUnmet(): void
     {
         [$owner, $organization, $backend] = $this->orgWithTeam();

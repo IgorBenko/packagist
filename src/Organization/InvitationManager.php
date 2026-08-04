@@ -167,9 +167,9 @@ final class InvitationManager
             $user->getId(),
             $organization->isOrgMember($user->getId()),
             $acceptedTeamIds,
-            $ownersAmongTeams,
-            $user->hasSecondFactorAuthenticationEnabled(),
-            $organization->policies()->unmetBy($this->policyFacts->forUser($user)),
+            $organization->policies()->unmetBy(
+                $this->policyFacts->forUser($user)->withOwnership($ownersAmongTeams),
+            ),
             $now,
         );
         $organization->joinViaInvitation($user->getId(), $acceptedTeamIds, $invitation->id);
