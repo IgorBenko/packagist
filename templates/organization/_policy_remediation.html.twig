@@ -1,12 +1,14 @@
 {#
     One organization policy the current user does not satisfy, and where to go to fix it. Rendered once per
-    policy they fail, by both the suspension banner and the invitation checklist. The copy lives on
-    App\Organization\Domain\PolicyComplianceReason; only the link belongs here, so route names stay out
-    of the domain.
+    policy they fail, by both the suspension banner and the invitation checklist. The copy is built by
+    App\Organization\Domain\OrganizationPolicies::remediationsFor(), which can name the org's configured
+    values; only the link belongs here, so route names stay out of the domain.
 #}
 <li>
-    {{ reason.remediation }}
-    {% if reason.value == 'two_factor' and app.user %}
+    {{ remediation.text }}
+    {% if remediation.reason.value == 'two_factor' and app.user %}
         <a href="{{ path('user_2fa_configure', { name: app.user.username }) }}">Set up two-factor authentication</a>
+    {% elseif remediation.reason.value == 'email_domain' and app.user %}
+        <a href="{{ path('edit_profile') }}">Change your account email address</a>
     {% endif %}
 </li>

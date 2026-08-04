@@ -12,6 +12,7 @@
 
 namespace App\Entity;
 
+use App\Organization\Domain\AllowedEmailDomains;
 use App\Organization\Domain\OrganizationPolicies;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
@@ -41,6 +42,14 @@ class OrganizationPolicyRepository extends ServiceEntityRepository
      */
     public function policiesFor(Ulid $orgId): OrganizationPolicies
     {
-        return new OrganizationPolicies($this->findForOrg($orgId)?->enforceTwoFactor === true);
+        $policy = $this->findForOrg($orgId);
+        if ($policy === null) {
+            return new OrganizationPolicies();
+        }
+
+        return new OrganizationPolicies(
+            enforceTwoFactor: $policy->enforceTwoFactor,
+            allowedEmailDomains: AllowedEmailDomains::fromValues($policy->allowedEmailDomains),
+        );
     }
 }

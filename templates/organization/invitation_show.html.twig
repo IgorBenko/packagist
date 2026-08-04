@@ -21,7 +21,7 @@
             <a class="btn btn-default" href="{{ path('organization_show', { organization: organization.slug }) }}">Go to {{ organization.displayName }}</a>
         </div>
     {% else %}
-        {% if unmetPolicies.reasons %}
+        {% if remediations %}
             <div class="alert alert-warning">
                 {# One list for every requirement; the heading only says whether ownership is what triggers them. #}
                 <strong>
@@ -32,8 +32,8 @@
                     {% endif %}
                 </strong>
                 <ul>
-                    {% for reason in unmetPolicies.reasons %}
-                        {{ include('organization/_policy_remediation.html.twig', { reason: reason }) }}
+                    {% for remediation in remediations %}
+                        {{ include('organization/_policy_remediation.html.twig', { remediation: remediation }) }}
                     {% endfor %}
                 </ul>
                 This invitation stays valid in the meantime: come back to this page and accept once you are done.

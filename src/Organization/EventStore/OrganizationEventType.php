@@ -32,6 +32,7 @@ enum OrganizationEventType: string
     // Policy: the security bar the org requires of everyone acting for it, and the suspension state that
     // failing it produces. The compliance events are automation-triggered and carry no acting user.
     case TwoFactorEnforcementEdited = 'two-factor-enforcement-edited';
+    case AllowedEmailDomainsEdited = 'allowed-email-domains-edited';
     case MemberPolicyComplianceFailed = 'member-policy-compliance-failed';
     case MemberPolicyComplianceRestored = 'member-policy-compliance-restored';
 

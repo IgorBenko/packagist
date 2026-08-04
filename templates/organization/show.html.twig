@@ -10,19 +10,6 @@
         <p class="alert alert-warning">This organization has been deleted.</p>
     {% endif %}
 
-    {% if unmetPolicies.reasons %}
-        <div class="alert alert-warning">
-            <strong>Your access to this organization is suspended.</strong>
-            You are still a member, but you cannot act for the organization until you satisfy its policies:
-            <ul>
-                {% for reason in unmetPolicies.reasons %}
-                    {{ include('organization/_policy_remediation.html.twig', { reason: reason }) }}
-                {% endfor %}
-            </ul>
-            Your access is restored automatically once you have.
-        </div>
-    {% endif %}
-
     <dl class="dl-horizontal">
         <dt>Slug</dt>
         <dd><code>/organizations/{{ organization.slug }}</code></dd>

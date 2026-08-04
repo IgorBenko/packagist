@@ -15,4 +15,10 @@ namespace App\Form\Model;
 class OrganizationPolicyRequest
 {
     public bool $enforceTwoFactor = false;
+
+    /**
+     * As typed: comma or whitespace separated. {@see \App\Organization\Domain\AllowedEmailDomains} does the
+     * validating, so an invalid entry comes back as a form error rather than a constraint duplicated here.
+     */
+    public string $allowedEmailDomains = '';
 }

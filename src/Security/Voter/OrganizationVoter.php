@@ -135,6 +135,8 @@ class OrganizationVoter extends Voter
         // A match, so a new policy forces a decision here about whether it can name a remedy of its own.
         return match ($sole) {
             PolicyComplianceReason::TwoFactor => OrganizationAccessDeniedReason::TwoFactorRequired,
+            // Changing an account email has no single page worth redirecting to.
+            PolicyComplianceReason::EmailDomain => OrganizationAccessDeniedReason::PolicySuspended,
         };
     }
 

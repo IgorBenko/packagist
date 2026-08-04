@@ -32,6 +32,8 @@
             {{ form_help(form.enforceTwoFactor) }}
         </div>
 
+        {{ form_row(form.allowedEmailDomains) }}
+
         <input class="btn btn-success btn-lg" type="submit" value="Save policies" />
     {{ form_end(form) }}
 {% endblock %}

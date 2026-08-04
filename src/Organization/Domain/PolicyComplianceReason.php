@@ -16,26 +16,24 @@ namespace App\Organization\Domain;
  * Which active organization policy a member fails. Recorded on
  * {@see Event\MemberPolicyComplianceFailed} and stored on the member read model so a cleared policy
  * restores only the members suspended for it.
+ *
+ * What to do about it lives on {@see OrganizationPolicies::remediationsFor()}, which knows the org's
+ * configured values.
  */
 enum PolicyComplianceReason: string
 {
     case TwoFactor = 'two_factor';
+    case EmailDomain = 'email_domain';
 
     /**
-     * What the member has to do to comply. Shown to a suspended member and to an invitee who cannot
-     * accept yet, so both read from one place.
+     * The policy named in the third person, for lines written about someone else (the audit log, the
+     * members list) where a remediation addressed to them would not fit.
      */
-    public function remediation(): string
-    {
-        return match ($this) {
-            self::TwoFactor => 'Enable two-factor authentication on your account.',
-        };
-    }
-
     public function label(): string
     {
         return match ($this) {
             self::TwoFactor => 'two-factor authentication',
+            self::EmailDomain => 'email address domain',
         };
     }
 }

@@ -25,6 +25,7 @@ final readonly class OrganizationPolicies
 {
     public function __construct(
         public bool $enforceTwoFactor = false,
+        public AllowedEmailDomains $allowedEmailDomains = new AllowedEmailDomains(),
     ) {
     }
 
@@ -44,7 +45,30 @@ final readonly class OrganizationPolicies
             $unmet[] = PolicyComplianceReason::TwoFactor;
         }
 
+        if (!$this->allowedEmailDomains->isEmpty() && !$this->allowedEmailDomains->matches($facts->emailDomain)) {
+            $unmet[] = PolicyComplianceReason::EmailDomain;
+        }
+
         return new UnmetPolicies(...$unmet);
+    }
+
+    /**
+     * What the person has to do about each unmet policy. Lives here rather than on the reason because the
+     * wording names this org's configured values.
+     *
+     * @return list<PolicyRemediation>
+     */
+    public function remediationsFor(UnmetPolicies $unmet): array
+    {
+        $remediations = [];
+        foreach ($unmet->reasons as $reason) {
+            $remediations[] = new PolicyRemediation($reason, match ($reason) {
+                PolicyComplianceReason::TwoFactor => 'Enable two-factor authentication on your account.',
+                PolicyComplianceReason::EmailDomain => $this->emailDomainRemediation(),
+            });
+        }
+
+        return $remediations;
     }
 
     /**
@@ -53,6 +77,26 @@ final readonly class OrganizationPolicies
      */
     public function withTwoFactorEnforcement(bool $enforced): self
     {
-        return new self(enforceTwoFactor: $enforced);
+        return new self(enforceTwoFactor: $enforced, allowedEmailDomains: $this->allowedEmailDomains);
+    }
+
+    public function withAllowedEmailDomains(AllowedEmailDomains $domains): self
+    {
+        return new self(enforceTwoFactor: $this->enforceTwoFactor, allowedEmailDomains: $domains);
+    }
+
+    private function emailDomainRemediation(): string
+    {
+        // No domains configured means a member is still suspended for a policy since cleared, which their
+        // next request repairs.
+        if ($this->allowedEmailDomains->isEmpty()) {
+            return 'Use an account email address on a domain this organization allows.';
+        }
+
+        if (\count($this->allowedEmailDomains->domains) === 1) {
+            return sprintf('Use an account email address on %s.', $this->allowedEmailDomains->domains[0]);
+        }
+
+        return sprintf('Use an account email address on one of: %s.', implode(', ', $this->allowedEmailDomains->domains));
     }
 }

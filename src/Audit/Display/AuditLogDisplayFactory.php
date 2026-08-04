@@ -439,6 +439,15 @@ class AuditLogDisplayFactory
                 $this->buildActor($record->attributes['actor']),
                 $record->ip,
             ),
+            AuditRecordType::OrganizationAllowedEmailDomainsSet,
+            AuditRecordType::OrganizationAllowedEmailDomainsCleared => new OrganizationAllowedEmailDomainsDisplay(
+                $record->type,
+                $record->datetime,
+                OrganizationDisplay::fromRecord($record->attributes['organization']),
+                array_values(array_map(strval(...), (array) ($record->attributes['domains'] ?? []))),
+                $this->buildActor($record->attributes['actor']),
+                $record->ip,
+            ),
             AuditRecordType::OrganizationMemberAccessSuspended,
             AuditRecordType::OrganizationMemberAccessRestored => new OrganizationMemberComplianceDisplay(
                 $record->type,
