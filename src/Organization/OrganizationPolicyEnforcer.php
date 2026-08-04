@@ -18,7 +18,7 @@ use App\Entity\OrganizationPolicyRepository;
 use App\Entity\OrganizationTeamMemberRepository;
 use App\Entity\User;
 use App\Organization\Domain\Organization;
-use App\Organization\Domain\PolicyComplianceReason;
+use App\Organization\Domain\UnmetPolicies;
 use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\ConcurrencyException;
 use App\Organization\EventStore\EventStore;
@@ -33,7 +33,7 @@ use App\Organization\EventStore\EventStore;
  */
 final class OrganizationPolicyEnforcer
 {
-    /** @var array<string, ?PolicyComplianceReason> "orgId:userId" => verdict, memoized for the request */
+    /** @var array<string, UnmetPolicies> "orgId:userId" => verdict, memoized for the request */
     private array $verified = [];
 
     public function __construct(
@@ -46,29 +46,24 @@ final class OrganizationPolicyEnforcer
     }
 
     /**
-     * The policy the member fails, or null when they comply (or are not a member at all).
+     * Every policy the member fails, empty when they comply (or are not a member at all).
      *
      * A page render consults the voter many times, so the verdict is computed once per org and user: only
      * a genuine change of state may write to the event stream.
      */
-    public function enforce(OrganizationReadModel $organization, User $user): ?PolicyComplianceReason
+    public function enforce(OrganizationReadModel $organization, User $user): UnmetPolicies
     {
         $key = $organization->id->toRfc4122().':'.$user->getId();
 
-        // array_key_exists, not ??=: a compliant member's verdict is null and must still count as cached.
-        if (!\array_key_exists($key, $this->verified)) {
-            $this->verified[$key] = $this->verify($organization, $user);
-        }
-
-        return $this->verified[$key];
+        return $this->verified[$key] ??= $this->verify($organization, $user);
     }
 
-    private function verify(OrganizationReadModel $organization, User $user): ?PolicyComplianceReason
+    private function verify(OrganizationReadModel $organization, User $user): UnmetPolicies
     {
         // Policies apply to members. Non-members are refused by the voter on membership grounds instead.
         $member = $this->organizationMemberRepo->findOneByOrgAndUser($organization->id, $user->getId());
         if ($member === null) {
-            return null;
+            return UnmetPolicies::none();
         }
 
         // Read model only: three indexed lookups, where replaying the stream would load the org's whole
@@ -79,22 +74,24 @@ final class OrganizationPolicyEnforcer
             ),
         );
 
-        if ($unmet === $member->suspendedReason) {
+        if ($unmet->equals($member->suspendedPolicies)) {
             return $unmet;
         }
 
         // The aggregate's view of ownership is authoritative, but it can only speak for a member it knows:
         // a stream that cannot confirm the membership must not hand back access the read model refused.
-        return $this->recordTransition($organization, $user) ?? $unmet;
+        $recorded = $this->recordTransition($organization, $user);
+
+        return $recorded->isEmpty() ? $unmet : $recorded;
     }
 
     /**
      * The verdict changed, so the state transition has to reach the event stream. Only this path pays for
      * the aggregate; the aggregate re-derives the verdict itself, from its own view of ownership, and is
-     * the one that decides what gets recorded. Null when it has no opinion, including when it does not know
-     * the member at all.
+     * the one that decides what gets recorded. Empty when it sees nothing to fix, including when it does not
+     * know the member at all.
      */
-    private function recordTransition(OrganizationReadModel $organization, User $user): ?PolicyComplianceReason
+    private function recordTransition(OrganizationReadModel $organization, User $user): UnmetPolicies
     {
         $aggregate = Organization::reconstitute(
             $organization->id,
@@ -110,6 +107,6 @@ final class OrganizationPolicyEnforcer
             // for this request; persisting the transition can wait for the next one.
         }
 
-        return $aggregate->suspensionReasonFor($user->getId());
+        return $aggregate->unmetPoliciesFor($user->getId());
     }
 }

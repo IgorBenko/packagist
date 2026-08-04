@@ -29,19 +29,22 @@ final readonly class OrganizationPolicies
     }
 
     /**
-     * The first requirement these facts fail, or null when they satisfy all of them.
+     * Every requirement these facts fail, so the caller can report the full set rather than making someone
+     * fix one to discover the next.
      *
      * Deliberately more than the fields above: 2FA for owners is a standing platform rule, not one of this
      * org's policies, so it holds whether or not `enforce_2fa` is on and turning that off does not restore an
      * owner who dropped 2FA.
      */
-    public function unmetBy(MemberPolicyFacts $facts): ?PolicyComplianceReason
+    public function unmetBy(MemberPolicyFacts $facts): UnmetPolicies
     {
+        $unmet = [];
+
         if (($this->enforceTwoFactor || $facts->isOwner) && !$facts->hasTwoFactor) {
-            return PolicyComplianceReason::TwoFactor;
+            $unmet[] = PolicyComplianceReason::TwoFactor;
         }
 
-        return null;
+        return new UnmetPolicies(...$unmet);
     }
 
     /**

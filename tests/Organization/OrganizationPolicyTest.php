@@ -59,7 +59,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $member->getId());
         self::assertNotNull($memberRow);
         self::assertTrue($memberRow->suspended);
-        self::assertSame(PolicyComplianceReason::TwoFactor, $memberRow->suspendedReason);
+        self::assertSame([PolicyComplianceReason::TwoFactor], $memberRow->suspendedPolicies->reasons);
         self::assertSame(1, $this->members()->countSuspended($organization->id));
 
         // The owner has 2FA, so they are unaffected.
@@ -83,7 +83,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $member->getId());
         self::assertNotNull($memberRow);
         self::assertFalse($memberRow->suspended);
-        self::assertNull($memberRow->suspendedReason);
+        self::assertTrue($memberRow->suspendedPolicies->isEmpty());
 
         self::assertSame(1, $this->auditCount($organization, 'organization_two_factor_enforcement_disabled'));
         self::assertSame(1, $this->auditCount($organization, 'organization_member_access_restored'));
@@ -114,7 +114,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $member->setTotpSecret(null);
         static::getEM()->flush();
 
-        self::assertSame(PolicyComplianceReason::TwoFactor, $this->enforcer()->enforce($organization, $member));
+        self::assertSame([PolicyComplianceReason::TwoFactor], $this->enforcer()->enforce($organization, $member)->reasons);
         self::assertTrue($memberRow->suspended);
         self::assertSame(1, $this->auditCount($organization, 'organization_member_access_suspended'));
     }
@@ -130,7 +130,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $member->setTotpSecret('totp-secret');
         static::getEM()->flush();
 
-        self::assertNull($this->enforcer()->enforce($organization, $member));
+        self::assertTrue($this->enforcer()->enforce($organization, $member)->isEmpty());
 
         $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $member->getId());
         self::assertNotNull($memberRow);
@@ -148,7 +148,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $eventsAfterEnabling = $this->eventCount($organization);
 
         // Already suspended for exactly this reason: re-verifying must not append anything.
-        self::assertSame(PolicyComplianceReason::TwoFactor, $this->enforcer()->enforce($organization, $member));
+        self::assertSame([PolicyComplianceReason::TwoFactor], $this->enforcer()->enforce($organization, $member)->reasons);
         self::assertSame($eventsAfterEnabling, $this->eventCount($organization));
         self::assertSame(1, $this->auditCount($organization, 'organization_member_access_suspended'));
     }
@@ -164,7 +164,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $owner->setTotpSecret(null);
         static::getEM()->flush();
 
-        self::assertSame(PolicyComplianceReason::TwoFactor, $this->enforcer()->enforce($organization, $owner));
+        self::assertSame([PolicyComplianceReason::TwoFactor], $this->enforcer()->enforce($organization, $owner)->reasons);
 
         $ownerRow = $this->members()->findOneByOrgAndUser($organization->id, $owner->getId());
         self::assertNotNull($ownerRow);
@@ -195,7 +195,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $ownerRow = $this->members()->findOneByOrgAndUser($organization->id, $owner->getId());
         self::assertNotNull($ownerRow);
         self::assertTrue($ownerRow->suspended);
-        self::assertSame(PolicyComplianceReason::TwoFactor, $ownerRow->suspendedReason);
+        self::assertSame([PolicyComplianceReason::TwoFactor], $ownerRow->suspendedPolicies->reasons);
     }
 
     public function testCompliantMemberDoesNotReplayTheEventStreamOnAPageView(): void
@@ -235,7 +235,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
 
         $this->policyManager()->setTwoFactorEnforcement($organization, $owner, true, null);
 
-        self::assertNull($this->enforcer()->enforce($organization, $outsider));
+        self::assertTrue($this->enforcer()->enforce($organization, $outsider)->isEmpty());
         self::assertSame(0, $this->members()->countSuspended($organization->id));
     }
 
