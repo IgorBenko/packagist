@@ -12,6 +12,7 @@
 
 namespace App\Tests\Organization;
 
+use App\Entity\AuditRecordRepository;
 use App\Entity\Organization as OrganizationReadModel;
 use App\Entity\OrganizationMemberRepository;
 use App\Entity\OrganizationPolicyRepository;
@@ -69,6 +70,9 @@ class OrganizationPolicyTest extends IntegrationTestCase
 
         self::assertSame(1, $this->auditCount($organization, 'organization_two_factor_enforcement_enabled'));
         self::assertSame(1, $this->auditCount($organization, 'organization_member_access_suspended'));
+
+        // Recorded so the org's own audit log can name them; rendering them is the display factory's call.
+        self::assertSame(['two_factor'], $this->auditAttributes($organization, 'organization_member_access_suspended')['policies']);
     }
 
     public function testDisablingRestoresTheSuspendedMembersAndLogsIt(): void
@@ -271,6 +275,19 @@ class OrganizationPolicyTest extends IntegrationTestCase
             'SELECT COUNT(*) FROM audit_log WHERE type = :type AND organizationId = :org',
             ['type' => $type, 'org' => $organization->id->toBinary()],
         );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function auditAttributes(OrganizationReadModel $organization, string $type): array
+    {
+        $records = static::getService(AuditRecordRepository::class)->findBy(
+            ['type' => $type, 'organizationId' => $organization->id],
+        );
+        self::assertCount(1, $records);
+
+        return $records[0]->attributes;
     }
 
     private function eventCount(OrganizationReadModel $organization): int

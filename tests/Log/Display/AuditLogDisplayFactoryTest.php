@@ -27,6 +27,7 @@ use App\Log\Display\Event\FilterListEntryEnabledDisplay;
 use App\Log\Display\Event\GenericUserDisplay;
 use App\Log\Display\Event\GitHubLinkedWithUserDisplay;
 use App\Log\Display\Event\OrganizationInvitationDisplay;
+use App\Log\Display\Event\OrganizationMemberComplianceDisplay;
 use App\Log\Display\Event\PackageAbandonedDisplay;
 use App\Log\Display\Event\PackageCreatedDisplay;
 use App\Log\Display\Event\PackageDeletedDisplay;
@@ -40,6 +41,7 @@ use App\Log\Display\Event\TwoFaDeactivatedDisplay;
 use App\Log\Display\Event\UserFreezeDisplay;
 use App\Log\Display\Event\UserVerifiedDisplay;
 use App\Log\Display\Event\VersionDeletedDisplay;
+use App\Organization\Domain\PolicyComplianceReason;
 use PHPUnit\Framework\Attributes\TestWith;
 use PHPUnit\Framework\MockObject\Stub;
 use PHPUnit\Framework\TestCase;
@@ -883,6 +885,86 @@ class AuditLogDisplayFactoryTest extends TestCase
 
         self::assertInstanceOf(OrganizationInvitationDisplay::class, $display);
         self::assertSame($expectedEmail, $display->email);
+    }
+
+    /**
+     * Which policy a member failed says whether their account has a second factor, so the public
+     * transparency log gets the generic line and only the org's own log and auditors see the set.
+     */
+    #[TestWith([false, false, []])]
+    #[TestWith([true, false, [PolicyComplianceReason::TwoFactor]])]
+    #[TestWith([false, true, [PolicyComplianceReason::TwoFactor]])]
+    public function testMemberAccessSuspendedPolicyVisibility(bool $isAuditor, bool $revealMemberDetails, array $expected): void
+    {
+        $security = $this->createStub(Security::class);
+        $security->method('isGranted')->willReturn($isAuditor);
+        $this->factory = new AuditLogDisplayFactory($security);
+
+        $auditRecord = $this->createAuditRecord(
+            AuditLogEventType::OrganizationMemberAccessSuspended,
+            [
+                'organization' => ['id' => (string) new Ulid(), 'org_slug' => 'acme', 'org_name' => 'ACME Corp'],
+                'user' => ['id' => 7, 'username' => 'alice'],
+                'policies' => ['two_factor'],
+                'actor' => 'automation',
+            ],
+            userId: 7,
+        );
+
+        $display = $this->factory->buildSingle($auditRecord, $revealMemberDetails);
+
+        self::assertInstanceOf(OrganizationMemberComplianceDisplay::class, $display);
+        self::assertSame($expected, $display->policies->reasons);
+        self::assertSame('alice', $display->member->username);
+        self::assertNull($display->actor->id);
+    }
+
+    /** Records written before the policies were recorded, and policies retired since, both have to render. */
+    #[TestWith([[]])]
+    #[TestWith([['policies' => []]])]
+    #[TestWith([['policies' => ['a_policy_that_no_longer_exists']]])]
+    public function testMemberAccessSuspendedWithoutRecognisablePolicies(array $extraAttributes): void
+    {
+        $security = $this->createStub(Security::class);
+        $security->method('isGranted')->willReturn(true);
+        $this->factory = new AuditLogDisplayFactory($security);
+
+        $auditRecord = $this->createAuditRecord(
+            AuditLogEventType::OrganizationMemberAccessSuspended,
+            [
+                'organization' => ['id' => (string) new Ulid(), 'org_slug' => 'acme', 'org_name' => 'ACME Corp'],
+                'user' => ['id' => 7, 'username' => 'alice'],
+                'actor' => 'automation',
+            ] + $extraAttributes,
+        );
+
+        $display = $this->factory->buildSingle($auditRecord);
+
+        self::assertInstanceOf(OrganizationMemberComplianceDisplay::class, $display);
+        self::assertTrue($display->policies->isEmpty());
+    }
+
+    public function testMemberAccessRestoredNamesNoPolicy(): void
+    {
+        $security = $this->createStub(Security::class);
+        $security->method('isGranted')->willReturn(true);
+        $this->factory = new AuditLogDisplayFactory($security);
+
+        $auditRecord = $this->createAuditRecord(
+            AuditLogEventType::OrganizationMemberAccessRestored,
+            [
+                'organization' => ['id' => (string) new Ulid(), 'org_slug' => 'acme', 'org_name' => 'ACME Corp'],
+                'user' => ['id' => 7, 'username' => 'alice'],
+                'policies' => [],
+                'actor' => 'automation',
+            ],
+        );
+
+        $display = $this->factory->buildSingle($auditRecord);
+
+        self::assertInstanceOf(OrganizationMemberComplianceDisplay::class, $display);
+        self::assertTrue($display->policies->isEmpty());
+        self::assertSame('log/display/organization_member_access_restored.html.twig', $display->getTemplateName());
     }
 
     /**
