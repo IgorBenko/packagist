@@ -309,7 +309,11 @@ class OrganizationControllerTest extends IntegrationTestCase
         $crawler = $this->client->request('GET', '/organizations/acme/members');
 
         self::assertResponseIsSuccessful();
-        self::assertCount(1, $crawler->filter('.label-danger:contains("suspended")'));
+        $label = $crawler->filter('.label-danger:contains("suspended")');
+        self::assertCount(1, $label);
+
+        // Third-person form: this row is about someone else, so the member-facing remediation reads wrong.
+        self::assertSame('Does not meet: two-factor authentication', $label->attr('title'));
     }
 
     public function testTeamsForbiddenForNonOwner(): void
