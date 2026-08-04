@@ -226,7 +226,7 @@ class OrganizationController extends Controller
 
         return $this->render('organization/audit_log.html.twig', [
             'organization' => $organization,
-            'auditLogDisplays' => $displayFactory->build($auditLogs, revealEmails: true),
+            'auditLogDisplays' => $displayFactory->build($auditLogs, revealMemberDetails: true),
             'auditLogPaginator' => $auditLogs,
             'types' => AuditRecordType::organizationCases(),
             'selectedFilters' => $selectedFilters,

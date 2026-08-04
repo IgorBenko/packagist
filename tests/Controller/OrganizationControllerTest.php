@@ -25,6 +25,8 @@ use App\Entity\OrganizationTeamRepository;
 use App\Entity\User;
 use App\Organization\Domain\Organization as OrganizationAggregate;
 use App\Organization\Domain\OrganizationTeamKind;
+use App\Organization\Domain\PolicyComplianceReason;
+use App\Organization\Domain\UnmetPolicies;
 use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\EventStore;
 use App\Organization\OrganizationManager;
@@ -972,6 +974,31 @@ class OrganizationControllerTest extends IntegrationTestCase
 
         $types = $crawler->filter('[data-test=audit-log-type]')->each(fn ($element) => trim($element->text()));
         self::assertCount(2, $types, 'Only the two records for this organization should be listed');
+    }
+
+    public function testAuditLogNamesThePolicyASuspendedMemberFailed(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $member = self::createUser('member', 'member@example.org');
+        $this->store($owner, $member);
+        $organization = $this->persistOrganization('acme', 'ACME Corp', owner: $owner);
+
+        $this->store(AuditRecord::organizationMemberAccessSuspended(
+            $organization->id,
+            $organization->slug,
+            $organization->displayName,
+            $member,
+            new UnmetPolicies(PolicyComplianceReason::TwoFactor),
+        ));
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/audit-log');
+        self::assertResponseIsSuccessful();
+
+        // Owners see what the member has to fix; the transparency log does not, see
+        // TransparencyLogControllerTest::testSuspensionDoesNotNameThePolicyOnTheTransparencyLog().
+        self::assertStringContainsString('two-factor authentication', $crawler->filter('td.audit-log-details')->text());
     }
 
     public function testAuditLogTypeFilterNarrowsResults(): void

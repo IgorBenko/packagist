@@ -18,6 +18,8 @@ use App\Entity\AuditRecord;
 use App\Entity\User;
 use App\FilterList\FilterLists;
 use App\FilterList\FilterSources;
+use App\Organization\Domain\PolicyComplianceReason;
+use App\Organization\Domain\UnmetPolicies;
 use Symfony\Bundle\SecurityBundle\Security;
 
 class AuditLogDisplayFactory
@@ -32,21 +34,21 @@ class AuditLogDisplayFactory
      *
      * @return array<AuditLogDisplayInterface>
      */
-    public function build(iterable $auditRecords, bool $revealEmails = false): array
+    public function build(iterable $auditRecords, bool $revealMemberDetails = false): array
     {
         $displays = [];
         foreach ($auditRecords as $record) {
-            $displays[] = $this->buildSingle($record, $revealEmails);
+            $displays[] = $this->buildSingle($record, $revealMemberDetails);
         }
 
         return $displays;
     }
 
     /**
-     * $revealEmails skips obfuscation for viewers already authorized to see them (e.g. the
+     * $revealMemberDetails skips obfuscation for viewers already authorized to see them (e.g. the
      * organization-internal audit log, gated by ViewAuditLog), unlike the public transparency log.
      */
-    public function buildSingle(AuditRecord $record, bool $revealEmails = false): AuditLogDisplayInterface
+    public function buildSingle(AuditRecord $record, bool $revealMemberDetails = false): AuditLogDisplayInterface
     {
         return match ($record->type) {
             AuditRecordType::MaintainerAdded => new MaintainerAddedDisplay(
@@ -443,6 +445,7 @@ class AuditLogDisplayFactory
                 $record->datetime,
                 OrganizationDisplay::fromRecord($record->attributes['organization']),
                 $this->buildActor($record->attributes['user']),
+                $this->unmetPolicies($record->attributes['policies'] ?? [], $revealMemberDetails),
                 $this->buildActor($record->attributes['actor']),
                 $record->ip,
             ),
@@ -455,7 +458,7 @@ class AuditLogDisplayFactory
                 $record->type,
                 $record->datetime,
                 OrganizationDisplay::fromRecord($record->attributes['organization']),
-                $this->obfuscateEmail($record->attributes['email'], revealEmails: $revealEmails),
+                $this->obfuscateEmail($record->attributes['email'], revealMemberDetails: $revealMemberDetails),
                 $this->buildActor($record->attributes['actor']),
                 $record->ip,
             ),
@@ -479,6 +482,33 @@ class AuditLogDisplayFactory
     }
 
     /**
+     * Empty unless the viewer is entitled to them: naming the policy on the public transparency log would
+     * advertise which accounts have no second factor.
+     */
+    private function unmetPolicies(mixed $policies, bool $revealMemberDetails): UnmetPolicies
+    {
+        if (!$revealMemberDetails && !$this->security->isGranted('ROLE_AUDITOR')) {
+            return UnmetPolicies::none();
+        }
+
+        if (!\is_array($policies)) {
+            return UnmetPolicies::none();
+        }
+
+        $reasons = [];
+        foreach ($policies as $value) {
+            // tryFrom, unlike the member's current state: a policy retired since must not break rendering
+            // the history that mentions it.
+            $reason = PolicyComplianceReason::tryFrom(strval($value));
+            if ($reason !== null) {
+                $reasons[] = $reason;
+            }
+        }
+
+        return new UnmetPolicies(...$reasons);
+    }
+
+    /**
      * Admin-only deletion reasons may contain PII, so only auditors (who can also see IPs/emails) see them.
      */
     private function internalReason(?string $reason): ?string
@@ -490,9 +520,9 @@ class AuditLogDisplayFactory
         return $this->security->isGranted('ROLE_AUDITOR') ? $reason : null;
     }
 
-    private function obfuscateEmail(string $email, ?int $userId = null, bool $revealEmails = false): string
+    private function obfuscateEmail(string $email, ?int $userId = null, bool $revealMemberDetails = false): string
     {
-        if ($revealEmails || $this->security->isGranted('ROLE_AUDITOR')) {
+        if ($revealMemberDetails || $this->security->isGranted('ROLE_AUDITOR')) {
             return $email;
         }
 
