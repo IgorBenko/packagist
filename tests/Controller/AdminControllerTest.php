@@ -96,7 +96,7 @@ class AdminControllerTest extends IntegrationTestCase
         static::assertStringContainsString('Filter lists', $crawler->html());
         static::assertStringContainsString('Suspect packages', $crawler->html());
         static::assertStringContainsString('Organizations', $crawler->html());
-        static::assertStringContainsString('Transparency log', $crawler->html());
+        static::assertStringContainsString('Audit log', $crawler->html());
     }
 
     public function testIndexAccessibleToDelegatedCapabilityShowsOnlyPermittedTools(): void
