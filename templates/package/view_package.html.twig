@@ -276,9 +276,6 @@
                                 <p><span>Ext name:</span>{{ version.pieName }}</p>
                             {% endif %}
                             <p class="purl"><span title="PURL / Package-URL">pkg:composer/{{ package.name }}</span></p>
-                            {% if is_granted('ROLE_AUDITOR') %}
-                                <p><a rel="nofollow noindex" href="{{ path('admin_audit_log', {package: package.name}) }}">Audit log</a></p>
-                            {% endif %}
                         </div>
                     </div>
 
@@ -373,6 +370,9 @@
                             <p>
                                 <a href="{{ path('view_transparency_log', {package: package.name}) }}" rel="nofollow noindex">Transparency log</a>
                             </p>
+                            {% if is_granted('ROLE_AUDITOR') %}
+                                <p><a rel="nofollow noindex" href="{{ path('admin_audit_log', {package: package.name}) }}">Audit log</a></p>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
