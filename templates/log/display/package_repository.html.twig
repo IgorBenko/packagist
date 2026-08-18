@@ -2,5 +2,4 @@
 
 <strong>{{ log.packageLink(display.packageName) }}</strong><br>
 {% if display.repository %}Repository: {{ display.repository }}<br>{% endif %}
-{% if display.reasonTranslationKey %}Reason: {{ display.reasonTranslationKey|trans }}<br>{% endif %}
-Frozen by: {{ display.actor.username }}
+By: {{ display.actor.username }}
