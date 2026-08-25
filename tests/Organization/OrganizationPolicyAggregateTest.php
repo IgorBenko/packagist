@@ -12,12 +12,16 @@
 
 namespace App\Tests\Organization;
 
+use App\Organization\Domain\AllowedEmailDomains;
+use App\Organization\Domain\Event\AllowedEmailDomainsEdited;
 use App\Organization\Domain\Event\MemberPolicyComplianceFailed;
 use App\Organization\Domain\Event\MemberPolicyComplianceRestored;
 use App\Organization\Domain\Event\TwoFactorEnforcementEdited;
+use App\Organization\Domain\Exception\EmailDomainMismatchException;
 use App\Organization\Domain\Exception\TwoFactorRequiredException;
 use App\Organization\Domain\MemberPolicyFacts;
 use App\Organization\Domain\Organization;
+use App\Organization\Domain\OrganizationPolicies;
 use App\Organization\Domain\PolicyComplianceReason;
 use App\Organization\EventStore\OrganizationEventType;
 use PHPUnit\Framework\TestCase;
@@ -32,7 +36,7 @@ class OrganizationPolicyAggregateTest extends TestCase
     {
         $organization = $this->orgWithSecondMember();
 
-        $organization->setTwoFactorEnforcement(true, true, [
+        self::enforceTwoFactor($organization, true, [
             self::OWNER => new MemberPolicyFacts(self::OWNER, true),
             self::MEMBER => new MemberPolicyFacts(self::MEMBER, false),
         ]);
@@ -60,10 +64,10 @@ class OrganizationPolicyAggregateTest extends TestCase
             self::MEMBER => new MemberPolicyFacts(self::MEMBER, false),
         ];
 
-        $organization->setTwoFactorEnforcement(true, true, $facts);
+        self::enforceTwoFactor($organization, true, $facts);
         $organization->pullPendingEvents();
 
-        $organization->setTwoFactorEnforcement(false, true, $facts);
+        self::enforceTwoFactor($organization, false, $facts);
 
         $events = $organization->pullPendingEvents();
         self::assertCount(2, $events);
@@ -79,7 +83,7 @@ class OrganizationPolicyAggregateTest extends TestCase
     {
         $organization = $this->orgWithSecondMember();
 
-        $organization->setTwoFactorEnforcement(false, true, []);
+        self::enforceTwoFactor($organization, false);
 
         self::assertSame([], $organization->pullPendingEvents());
     }
@@ -90,16 +94,16 @@ class OrganizationPolicyAggregateTest extends TestCase
 
         // An owner cannot impose a policy that would immediately lock them out.
         $this->expectException(TwoFactorRequiredException::class);
-        $organization->setTwoFactorEnforcement(true, false, []);
+        self::enforceTwoFactor($organization, true, actorHasTwoFactor: false);
     }
 
     public function testDisablingDoesNotRequireTheActorToHaveTwoFactor(): void
     {
         $organization = $this->orgWithSecondMember();
-        $organization->setTwoFactorEnforcement(true, true, []);
+        self::enforceTwoFactor($organization, true);
         $organization->pullPendingEvents();
 
-        $organization->setTwoFactorEnforcement(false, false, []);
+        self::enforceTwoFactor($organization, false, actorHasTwoFactor: false);
 
         $events = $organization->pullPendingEvents();
         self::assertCount(1, $events);
@@ -111,7 +115,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         $organization = $this->orgWithSecondMember();
 
         // No facts at all, e.g. the user records have gone: the policy still changes, nobody is judged.
-        $organization->setTwoFactorEnforcement(true, true, []);
+        self::enforceTwoFactor($organization, true);
 
         $events = $organization->pullPendingEvents();
         self::assertCount(1, $events);
@@ -121,7 +125,7 @@ class OrganizationPolicyAggregateTest extends TestCase
     public function testVerifyMemberComplianceSuspendsAndRestores(): void
     {
         $organization = $this->orgWithSecondMember();
-        $organization->setTwoFactorEnforcement(true, true, []);
+        self::enforceTwoFactor($organization, true);
         $organization->pullPendingEvents();
 
         $organization->verifyMemberCompliance(new MemberPolicyFacts(self::MEMBER, false));
@@ -141,7 +145,7 @@ class OrganizationPolicyAggregateTest extends TestCase
     public function testVerifyMemberComplianceIsIdempotent(): void
     {
         $organization = $this->orgWithSecondMember();
-        $organization->setTwoFactorEnforcement(true, true, []);
+        self::enforceTwoFactor($organization, true);
         $organization->verifyMemberCompliance(new MemberPolicyFacts(self::MEMBER, false));
         $organization->pullPendingEvents();
 
@@ -186,11 +190,11 @@ class OrganizationPolicyAggregateTest extends TestCase
 
         // A packagist-admin can enable the policy without holding 2FA, which is how an owner who lacks it
         // ends up suspended by the same batch.
-        $organization->setTwoFactorEnforcement(true, true, $facts);
+        self::enforceTwoFactor($organization, true, $facts);
         $organization->pullPendingEvents();
         self::assertSame([PolicyComplianceReason::TwoFactor], $organization->unmetPoliciesFor(self::OWNER)->reasons);
 
-        $organization->setTwoFactorEnforcement(false, true, $facts);
+        self::enforceTwoFactor($organization, false, $facts);
 
         // The plain member is restored; the owner is not, since the rule holding them was never this policy.
         $restored = array_values(array_filter(
@@ -221,7 +225,7 @@ class OrganizationPolicyAggregateTest extends TestCase
     public function testVerifyMemberComplianceIgnoresNonMembers(): void
     {
         $organization = $this->orgWithSecondMember();
-        $organization->setTwoFactorEnforcement(true, true, []);
+        self::enforceTwoFactor($organization, true);
         $organization->pullPendingEvents();
 
         $organization->verifyMemberCompliance(new MemberPolicyFacts(99, false));
@@ -232,7 +236,7 @@ class OrganizationPolicyAggregateTest extends TestCase
     public function testLeavingClearsTheSuspension(): void
     {
         $organization = $this->orgWithSecondMember();
-        $organization->setTwoFactorEnforcement(true, true, [
+        self::enforceTwoFactor($organization, true, [
             self::MEMBER => new MemberPolicyFacts(self::MEMBER, false),
         ]);
         $organization->pullPendingEvents();
@@ -263,6 +267,93 @@ class OrganizationPolicyAggregateTest extends TestCase
         ]);
 
         self::assertTrue($restored->unmetPoliciesFor(self::MEMBER)->isEmpty());
+    }
+
+    public function testBothPoliciesInOneEditSuspendAMemberOnce(): void
+    {
+        $organization = $this->orgWithSecondMember();
+
+        $organization->setPolicies(
+            new OrganizationPolicies(true, new AllowedEmailDomains('example.org')),
+            self::actor(),
+            [
+                self::OWNER => new MemberPolicyFacts(self::OWNER, true, emailDomain: 'example.org'),
+                self::MEMBER => new MemberPolicyFacts(self::MEMBER, false, emailDomain: 'other.org'),
+            ],
+        );
+
+        $events = $organization->pullPendingEvents();
+        self::assertCount(3, $events);
+        self::assertInstanceOf(TwoFactorEnforcementEdited::class, $events[0]);
+        self::assertInstanceOf(AllowedEmailDomainsEdited::class, $events[1]);
+
+        // One suspension naming both policies, rather than one per policy the edit touched.
+        self::assertInstanceOf(MemberPolicyComplianceFailed::class, $events[2]);
+        self::assertSame(self::MEMBER, $events[2]->userId);
+        self::assertSame(
+            [PolicyComplianceReason::TwoFactor, PolicyComplianceReason::EmailDomain],
+            $events[2]->unmetPolicies->reasons,
+        );
+    }
+
+    public function testARefusedPolicyLeavesTheRestOfTheSameEditUnrecorded(): void
+    {
+        $organization = $this->orgWithSecondMember();
+
+        // The 2FA half would be accepted on its own; the domain the actor is not on refuses the whole edit.
+        try {
+            $organization->setPolicies(
+                new OrganizationPolicies(true, new AllowedEmailDomains('acme.io')),
+                self::actor(),
+                [self::MEMBER => new MemberPolicyFacts(self::MEMBER, false)],
+            );
+            self::fail('Requiring a domain the actor is not on should have been refused.');
+        } catch (EmailDomainMismatchException) {
+        }
+
+        self::assertSame([], $organization->pullPendingEvents());
+        self::assertFalse($organization->policies()->enforceTwoFactor);
+        self::assertTrue($organization->unmetPoliciesFor(self::MEMBER)->isEmpty());
+    }
+
+    public function testOnlyTheChangedPolicyIsGuarded(): void
+    {
+        $organization = $this->orgWithSecondMember();
+        self::enforceTwoFactor($organization, true);
+        $organization->pullPendingEvents();
+
+        // Enforcement stays on but is not re-guarded, so an actor who has since lost 2FA themselves can
+        // still edit a different policy.
+        $organization->setPolicies(
+            $organization->policies()->withAllowedEmailDomains(new AllowedEmailDomains('example.org')),
+            self::actor(hasTwoFactor: false),
+            [],
+        );
+
+        $events = $organization->pullPendingEvents();
+        self::assertCount(1, $events);
+        self::assertInstanceOf(AllowedEmailDomainsEdited::class, $events[0]);
+        self::assertTrue($organization->policies()->enforceTwoFactor);
+    }
+
+    /**
+     * Edit two-factor enforcement on its own, the way the policy page does when nothing else changed.
+     *
+     * @param array<int, MemberPolicyFacts> $memberFacts
+     */
+    private static function enforceTwoFactor(Organization $organization, bool $enforced, array $memberFacts = [], bool $actorHasTwoFactor = true): void
+    {
+        $organization->setPolicies(
+            $organization->policies()->withTwoFactorEnforcement($enforced),
+            self::actor($actorHasTwoFactor),
+            $memberFacts,
+        );
+    }
+
+    /** The acting owner as the application service resolves them, on a domain the tests' policies allow. */
+    private static function actor(bool $hasTwoFactor = true): MemberPolicyFacts
+    {
+        return new MemberPolicyFacts(self::OWNER, $hasTwoFactor, emailDomain: 'example.org');
     }
 
     /**

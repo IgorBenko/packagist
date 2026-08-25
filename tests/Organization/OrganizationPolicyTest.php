@@ -45,7 +45,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         self::assertNull($this->policies()->findForOrg($organization->id));
         self::assertFalse($this->policies()->policiesFor($organization->id)->enforceTwoFactor);
 
-        $this->policyManager()->setTwoFactorEnforcement($organization, $owner, true, null);
+        $this->policyManager()->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
 
         $policy = $this->policies()->findForOrg($organization->id);
         self::assertNotNull($policy);
@@ -58,7 +58,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $organization = $this->createOrg($owner);
         $member = $this->joinAsMember($organization, 'plainmember', withTwoFactor: false);
 
-        $this->policyManager()->setTwoFactorEnforcement($organization, $owner, true, null);
+        $this->policyManager()->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
 
         $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $member->getId());
         self::assertNotNull($memberRow);
@@ -84,8 +84,8 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $organization = $this->createOrg($owner);
         $member = $this->joinAsMember($organization, 'plainmember', withTwoFactor: false);
 
-        $this->policyManager()->setTwoFactorEnforcement($organization, $owner, true, null);
-        $this->policyManager()->setTwoFactorEnforcement($organization, $owner, false, null);
+        $this->policyManager()->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
+        $this->policyManager()->setPolicies($organization, $owner, false, AllowedEmailDomains::none(), null);
 
         $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $member->getId());
         self::assertNotNull($memberRow);
@@ -102,7 +102,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $organization = $this->createOrg($owner);
 
         $this->expectException(TwoFactorRequiredException::class);
-        $this->policyManager()->setTwoFactorEnforcement($organization, $owner, true, null);
+        $this->policyManager()->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
     }
 
     public function testEnforcerSuspendsAMemberWhoDropsOutOfCompliance(): void
@@ -111,7 +111,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $organization = $this->createOrg($owner);
         $member = $this->joinAsMember($organization, 'plainmember', withTwoFactor: true);
 
-        $this->policyManager()->setTwoFactorEnforcement($organization, $owner, true, null);
+        $this->policyManager()->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
 
         // Compliant when the policy went live, so nothing was recorded then.
         $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $member->getId());
@@ -132,7 +132,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $organization = $this->createOrg($owner);
         $member = $this->joinAsMember($organization, 'plainmember', withTwoFactor: false);
 
-        $this->policyManager()->setTwoFactorEnforcement($organization, $owner, true, null);
+        $this->policyManager()->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
 
         $member->setTotpSecret('totp-secret');
         static::getEM()->flush();
@@ -151,7 +151,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $organization = $this->createOrg($owner);
         $member = $this->joinAsMember($organization, 'plainmember', withTwoFactor: false);
 
-        $this->policyManager()->setTwoFactorEnforcement($organization, $owner, true, null);
+        $this->policyManager()->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
         $eventsAfterEnabling = $this->eventCount($organization);
 
         // Already suspended for exactly this reason: re-verifying must not append anything.
@@ -191,8 +191,8 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $owner->setTotpSecret(null);
         static::getEM()->flush();
 
-        $this->policyManager()->setTwoFactorEnforcement($organization, $admin, true, null);
-        $this->policyManager()->setTwoFactorEnforcement($organization, $admin, false, null);
+        $this->policyManager()->setPolicies($organization, $admin, true, AllowedEmailDomains::none(), null);
+        $this->policyManager()->setPolicies($organization, $admin, false, AllowedEmailDomains::none(), null);
 
         // The plain member is back; the owner is not, because the rule holding them was never the policy.
         $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $member->getId());
@@ -240,7 +240,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $organization = $this->createOrg($owner);
         $outsider = $this->persistUser('outsider', withTwoFactor: false);
 
-        $this->policyManager()->setTwoFactorEnforcement($organization, $owner, true, null);
+        $this->policyManager()->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
 
         self::assertTrue($this->enforcer()->enforce($organization, $outsider)->isEmpty());
         self::assertSame(0, $this->members()->countSuspended($organization->id));
@@ -253,7 +253,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $outsideMember = $this->persistUser('elsewhere', withTwoFactor: true, email: 'elsewhere@other.org');
         $this->joinExistingUser($organization, $outsideMember);
 
-        $this->policyManager()->setAllowedEmailDomains($organization, $owner, new AllowedEmailDomains('example.org'), null);
+        $this->policyManager()->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
 
         // The owner is on example.org and is untouched; the member on another domain is suspended.
         $ownerRow = $this->members()->findOneByOrgAndUser($organization->id, $owner->getId());
@@ -275,7 +275,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $member = $this->persistUser('brand', withTwoFactor: true, email: 'brand@acme.io');
         $this->joinExistingUser($organization, $member);
 
-        $this->policyManager()->setAllowedEmailDomains($organization, $owner, new AllowedEmailDomains('example.org', 'acme.io'), null);
+        $this->policyManager()->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org', 'acme.io'), null);
 
         self::assertTrue($this->enforcer()->enforce($organization, $member)->isEmpty());
         self::assertSame(0, $this->members()->countSuspended($organization->id));
@@ -288,7 +288,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
 
         // This would suspend the owner from their own org, so it is refused before anything is recorded.
         $this->expectException(EmailDomainMismatchException::class);
-        $this->policyManager()->setAllowedEmailDomains($organization, $owner, new AllowedEmailDomains('acme.io'), null);
+        $this->policyManager()->setPolicies($organization, $owner, false, new AllowedEmailDomains('acme.io'), null);
     }
 
     public function testClearingTheDomainRequirementRestoresTheMembersItSuspended(): void
@@ -298,8 +298,8 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $member = $this->persistUser('elsewhere', withTwoFactor: true, email: 'elsewhere@other.org');
         $this->joinExistingUser($organization, $member);
 
-        $this->policyManager()->setAllowedEmailDomains($organization, $owner, new AllowedEmailDomains('example.org'), null);
-        $this->policyManager()->setAllowedEmailDomains($organization, $owner, AllowedEmailDomains::none(), null);
+        $this->policyManager()->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
+        $this->policyManager()->setPolicies($organization, $owner, false, AllowedEmailDomains::none(), null);
 
         $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $member->getId());
         self::assertNotNull($memberRow);
@@ -315,8 +315,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $member = $this->persistUser('elsewhere', withTwoFactor: false, email: 'elsewhere@other.org');
         $this->joinExistingUser($organization, $member);
 
-        $this->policyManager()->setTwoFactorEnforcement($organization, $owner, true, null);
-        $this->policyManager()->setAllowedEmailDomains($organization, $owner, new AllowedEmailDomains('example.org'), null);
+        $this->policyManager()->setPolicies($organization, $owner, true, new AllowedEmailDomains('example.org'), null);
 
         $unmet = $this->enforcer()->enforce($organization, $member);
         self::assertSame(
