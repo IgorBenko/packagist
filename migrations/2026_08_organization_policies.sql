@@ -2,8 +2,8 @@
 -- organization_policy is the read-model projection of an org's policies, the security bar every
 -- member acting for the org must clear. One row per org, projected from the policy events, created
 -- lazily the first time a policy is set: an org with no row has every policy inactive, so no
--- backfill for existing orgs is needed. Only enforceTwoFactor exists in this stage; the enforced
--- login method, allowed email domain and required GitHub orgs add their own columns when they land.
+-- backfill for existing orgs is needed. enforceTwoFactor and allowedEmailDomains exist in this
+-- stage; the enforced login method and required GitHub orgs add their own columns when they land.
 --
 -- organization_member gains the suspension state produced by the compliance events
 -- (member-policy-compliance-failed / -restored). A suspended member keeps their membership and
