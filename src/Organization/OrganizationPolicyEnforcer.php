@@ -22,6 +22,7 @@ use App\Organization\Domain\UnmetPolicies;
 use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\ConcurrencyException;
 use App\Organization\EventStore\EventStore;
+use Symfony\Contracts\Service\ResetInterface;
 
 /**
  * Verifies a member against the org's requirements on the requests where they act for it, and records the
@@ -31,7 +32,7 @@ use App\Organization\EventStore\EventStore;
  * Called from {@see \App\Security\Voter\OrganizationVoter}, so it runs on every page view of an org: the
  * verdict comes from the read model and the event stream is only touched when it changed.
  */
-final class OrganizationPolicyEnforcer
+final class OrganizationPolicyEnforcer implements ResetInterface
 {
     /** @var array<string, UnmetPolicies> "orgId:userId" => verdict, memoized for the request */
     private array $verified = [];
@@ -104,5 +105,15 @@ final class OrganizationPolicyEnforcer
         }
 
         return $aggregate->unmetPoliciesFor($user->getId());
+    }
+
+    /**
+     * The memo holds for one request only. Under php-fpm the whole container goes with it, but a worker
+     * runtime keeps this instance alive, and the next request must not inherit a verdict decided from
+     * facts that have since changed.
+     */
+    public function reset(): void
+    {
+        $this->verified = [];
     }
 }
