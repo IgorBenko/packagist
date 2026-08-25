@@ -35,39 +35,28 @@ final class OrganizationPolicyManager
     }
 
     /**
-     * Start or stop requiring two-factor authentication from every member. An unchanged value is a no-op.
+     * Save the policies the org's policy page owns, as one command in one transaction. A policy whose
+     * value is unchanged is a no-op, and a submission that any guard refuses records nothing at all.
      *
-     * @throws TwoFactorRequiredException the actor does not have 2FA themselves
-     */
-    public function setTwoFactorEnforcement(OrganizationReadModel $organization, User $actor, bool $enforced, ?string $ip): void
-    {
-        $aggregate = Organization::reconstitute(
-            $organization->id,
-            $this->eventStore->loadHistory($organization->id),
-        );
-
-        $aggregate->setTwoFactorEnforcement(
-            $enforced,
-            $actor->isTotpAuthenticationEnabled(),
-            $this->facts->forUserIds($aggregate->members()),
-        );
-
-        $this->eventStore->append($aggregate, $this->actorResolver->resolve($aggregate, $actor), $ip);
-    }
-
-    /**
+     * @throws TwoFactorRequiredException   the actor does not have 2FA themselves
      * @throws EmailDomainMismatchException the actor's own address is not on one of the domains
      */
-    public function setAllowedEmailDomains(OrganizationReadModel $organization, User $actor, AllowedEmailDomains $domains, ?string $ip): void
+    public function setPolicies(OrganizationReadModel $organization, User $actor, bool $enforceTwoFactor, AllowedEmailDomains $allowedEmailDomains, ?string $ip): void
     {
         $aggregate = Organization::reconstitute(
             $organization->id,
             $this->eventStore->loadHistory($organization->id),
         );
 
-        $aggregate->setAllowedEmailDomains(
-            $domains,
-            $this->facts->forUser($actor)->emailDomain,
+        // Layered onto the aggregate's own set, not the read model the form was rendered from, so a policy
+        // this call does not carry keeps its value.
+        $desired = $aggregate->policies()
+            ->withTwoFactorEnforcement($enforceTwoFactor)
+            ->withAllowedEmailDomains($allowedEmailDomains);
+
+        $aggregate->setPolicies(
+            $desired,
+            $this->facts->forUser($actor),
             $this->facts->forUserIds($aggregate->members()),
         );
 
