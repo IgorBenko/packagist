@@ -341,6 +341,23 @@ class OrganizationPolicyTest extends IntegrationTestCase
         );
     }
 
+    public function testAnOwnerTheMembershipTableDoesNotKnowStillNeedsTwoFactor(): void
+    {
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+
+        // The two tables are written together, so this state only arises when something diverged: a
+        // projection that fell behind, or rows loaded outside the event stream. The voter grants management
+        // off the owners team, so the enforcer must not answer "nothing unmet" for the same user.
+        $memberRow = $this->members()->findOneByOrgAndUser($organization->id, $owner->getId());
+        self::assertNotNull($memberRow);
+        static::getEM()->remove($memberRow);
+        $owner->setTotpSecret(null);
+        static::getEM()->flush();
+
+        self::assertSame([PolicyComplianceReason::TwoFactor], $this->enforcer()->enforce($organization, $owner)->reasons);
+    }
+
     public function testResettingTheEnforcerDropsTheRequestMemo(): void
     {
         $owner = $this->persistUser('orgowner', withTwoFactor: true);
