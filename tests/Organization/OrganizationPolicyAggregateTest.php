@@ -252,7 +252,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         $organization = Organization::reconstitute(new Ulid(), [
             ...$this->bootstrapHistory(),
             ['type' => OrganizationEventType::TwoFactorEnforcementEdited, 'payload' => ['enforced' => true]],
-            ['type' => OrganizationEventType::MemberPolicyComplianceFailed, 'payload' => ['userId' => self::MEMBER, 'reason' => 'two_factor']],
+            ['type' => OrganizationEventType::MemberPolicyComplianceFailed, 'payload' => ['userId' => self::MEMBER, 'reasons' => ['two_factor']]],
         ]);
 
         self::assertTrue($organization->policies()->enforceTwoFactor);
@@ -262,7 +262,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         $restored = Organization::reconstitute(new Ulid(), [
             ...$this->bootstrapHistory(),
             ['type' => OrganizationEventType::TwoFactorEnforcementEdited, 'payload' => ['enforced' => true]],
-            ['type' => OrganizationEventType::MemberPolicyComplianceFailed, 'payload' => ['userId' => self::MEMBER, 'reason' => 'two_factor']],
+            ['type' => OrganizationEventType::MemberPolicyComplianceFailed, 'payload' => ['userId' => self::MEMBER, 'reasons' => ['two_factor']]],
             ['type' => OrganizationEventType::MemberPolicyComplianceRestored, 'payload' => ['userId' => self::MEMBER]],
         ]);
 
