@@ -20,6 +20,7 @@ use App\Entity\OrganizationTeam;
 use App\Entity\OrganizationTeamMemberRepository;
 use App\Entity\OrganizationTeamRepository;
 use App\Entity\User;
+use App\Organization\Domain\AllowedEmailDomains;
 use App\Organization\Domain\InvitationStatus;
 use App\Organization\InvitationTokenGenerator;
 use App\Organization\OrganizationManager;
@@ -268,7 +269,7 @@ class OrganizationInvitationControllerTest extends IntegrationTestCase
         $this->client->loginUser($owner);
         $this->submitInvite($backend, 'alice@example.org');
         $path = $this->acceptUrlPath();
-        static::getService(OrganizationPolicyManager::class)->setTwoFactorEnforcement($organization, $owner, true, null);
+        static::getService(OrganizationPolicyManager::class)->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
 
         $this->client->loginUser($alice);
         $crawler = $this->client->request('GET', $path);

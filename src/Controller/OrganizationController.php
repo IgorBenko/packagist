@@ -177,17 +177,12 @@ class OrganizationController extends Controller
             $this->denyAccessUnlessGranted(OrganizationActions::EditPolicies->value, $organization);
 
             try {
-                // One command per policy, each a no-op when unchanged, so saving the page records only what
-                // actually changed.
-                $this->policyManager->setTwoFactorEnforcement(
+                // One command for the whole page: a rejected submission, whichever policy it fails on,
+                // leaves the org as it was instead of saving the half that passed.
+                $this->policyManager->setPolicies(
                     $organization,
                     $user,
                     $policyRequest->enforceTwoFactor,
-                    $request->getClientIp(),
-                );
-                $this->policyManager->setAllowedEmailDomains(
-                    $organization,
-                    $user,
                     AllowedEmailDomains::fromList($policyRequest->allowedEmailDomains),
                     $request->getClientIp(),
                 );

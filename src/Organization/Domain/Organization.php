@@ -130,50 +130,47 @@ final class Organization extends AbstractAggregate
     }
 
     /**
-     * Start or stop requiring two-factor authentication from every member. No-op when the value is
-     * unchanged.
+     * Set the policy set as a whole, recording only the policies whose value actually changed. The facts
+     * are known locally, so members are evaluated in the same batch instead of lazily: requiring 2FA
+     * suspends the members without it immediately, clearing a requirement restores the ones it suspended.
      *
-     * 2FA status is known locally, so every member is evaluated in the same batch instead of lazily:
-     * enabling suspends the members without 2FA immediately, disabling restores the ones it suspended.
+     * One command rather than one per policy so the guards below answer for the whole set: an edit that
+     * fails any of them leaves the org untouched instead of landing the policies checked first. Members
+     * are re-verified once for the same reason, so falling behind on two policies in one edit is a single
+     * suspension naming both.
      *
      * @param array<int, MemberPolicyFacts> $memberFacts userId => facts, for every current member
      *
-     * @throws TwoFactorRequiredException an owner cannot impose a policy they do not satisfy themselves
+     * @throws TwoFactorRequiredException   an owner cannot impose a policy they do not satisfy themselves
+     * @throws EmailDomainMismatchException an owner cannot impose a domain they are not on themselves
      */
-    public function setTwoFactorEnforcement(bool $enforced, bool $actorHasTwoFactor, array $memberFacts): void
+    public function setPolicies(OrganizationPolicies $desired, MemberPolicyFacts $actorFacts, array $memberFacts): void
     {
-        if ($this->policies->enforceTwoFactor === $enforced) {
+        $twoFactorChanged = $desired->enforceTwoFactor !== $this->policies->enforceTwoFactor;
+        $emailDomainsChanged = !$desired->allowedEmailDomains->equals($this->policies->allowedEmailDomains);
+
+        if (!$twoFactorChanged && !$emailDomainsChanged) {
             return;
         }
 
-        if ($enforced && !$actorHasTwoFactor) {
+        // Every guard runs before the first record(), which applies as it queues: an edit is all-or-nothing.
+        // Only a policy that changes is guarded, so an owner already out of compliance can still relax it.
+        if ($twoFactorChanged && $desired->enforceTwoFactor && !$actorFacts->hasTwoFactor) {
             throw new TwoFactorRequiredException('You must enable two-factor authentication on your own account before requiring it from the organization.');
         }
 
-        $this->record(new TwoFactorEnforcementEdited($this->id, $enforced));
-        $this->reverifyMembers($memberFacts);
-    }
-
-    /**
-     * Require member account emails to be on one of these domains, or accept any again when the set is
-     * empty. No-op when the set is unchanged. Addresses are known locally, so every member is evaluated in
-     * the same batch, as with 2FA enforcement.
-     *
-     * @param array<int, MemberPolicyFacts> $memberFacts userId => facts, for every current member
-     *
-     * @throws EmailDomainMismatchException an owner cannot impose a domain they are not on themselves
-     */
-    public function setAllowedEmailDomains(AllowedEmailDomains $domains, ?string $actorEmailDomain, array $memberFacts): void
-    {
-        if ($this->policies->allowedEmailDomains->equals($domains)) {
-            return;
-        }
-
-        if (!$domains->isEmpty() && !$domains->matches($actorEmailDomain)) {
+        if ($emailDomainsChanged && !$desired->allowedEmailDomains->isEmpty() && !$desired->allowedEmailDomains->matches($actorFacts->emailDomain)) {
             throw new EmailDomainMismatchException('Your own account email address must be on one of the domains you require, otherwise saving this would suspend you from your own organization.');
         }
 
-        $this->record(new AllowedEmailDomainsEdited($this->id, $domains));
+        if ($twoFactorChanged) {
+            $this->record(new TwoFactorEnforcementEdited($this->id, $desired->enforceTwoFactor));
+        }
+
+        if ($emailDomainsChanged) {
+            $this->record(new AllowedEmailDomainsEdited($this->id, $desired->allowedEmailDomains));
+        }
+
         $this->reverifyMembers($memberFacts);
     }
 

@@ -16,6 +16,7 @@ use App\Audit\AuditRecordType;
 use App\Entity\AuditRecord;
 use App\Entity\Organization;
 use App\Entity\OrganizationMember;
+use App\Entity\OrganizationMemberRepository;
 use App\Entity\OrganizationPolicyRepository;
 use App\Entity\OrganizationRepository;
 use App\Entity\OrganizationTeam;
@@ -269,6 +270,35 @@ class OrganizationControllerTest extends IntegrationTestCase
         );
     }
 
+    public function testARejectedPolicyDoesNotSaveTheRestOfTheSameSubmit(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        // No TOTP secret, so this member would be suspended the moment 2FA enforcement landed.
+        $member = self::createUser('member', 'member@example.org');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/policies');
+        $form = $crawler->selectButton('Save policies')->form([
+            'organization_policy[enforceTwoFactor]' => '1',
+            // Not a domain name, so the whole submission is refused.
+            'organization_policy[allowedEmailDomains]' => 'acme..io',
+        ]);
+        $crawler = $this->client->submit($form);
+
+        self::assertResponseIsSuccessful();
+        self::assertStringContainsString('is not a valid email address domain', $crawler->filter('.organization_policies')->text());
+
+        // Neither half landed, so the form the owner is looking at still describes the org.
+        $policies = static::getService(OrganizationPolicyRepository::class)->policiesFor($organization->id);
+        self::assertFalse($policies->enforceTwoFactor);
+        self::assertTrue($policies->allowedEmailDomains->isEmpty());
+        self::assertSame(0, static::getService(OrganizationMemberRepository::class)->countSuspended($organization->id));
+    }
+
     public function testMembersListNamesEveryPolicyASuspendedMemberFails(): void
     {
         $owner = self::createUser('owner', 'owner@example.org');
@@ -278,9 +308,8 @@ class OrganizationControllerTest extends IntegrationTestCase
         $this->store($owner, $member);
 
         $organization = $this->organizationWithMember($owner, $member);
-        $policyManager = static::getService(OrganizationPolicyManager::class);
-        $policyManager->setTwoFactorEnforcement($organization, $owner, true, null);
-        $policyManager->setAllowedEmailDomains($organization, $owner, new AllowedEmailDomains('example.org'), null);
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, true, new AllowedEmailDomains('example.org'), null);
 
         $this->client->loginUser($owner);
         $crawler = $this->client->request('GET', '/organizations/acme/members');
@@ -355,7 +384,7 @@ class OrganizationControllerTest extends IntegrationTestCase
         $this->store($owner, $member);
 
         $organization = $this->organizationWithMember($owner, $member);
-        static::getService(OrganizationPolicyManager::class)->setTwoFactorEnforcement($organization, $owner, true, null);
+        static::getService(OrganizationPolicyManager::class)->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
 
         $this->client->loginUser($member);
 
@@ -383,7 +412,7 @@ class OrganizationControllerTest extends IntegrationTestCase
         $this->store($owner, $member);
 
         $organization = $this->organizationWithMember($owner, $member);
-        static::getService(OrganizationPolicyManager::class)->setTwoFactorEnforcement($organization, $owner, true, null);
+        static::getService(OrganizationPolicyManager::class)->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
 
         $this->client->loginUser($owner);
         $crawler = $this->client->request('GET', '/organizations/acme/members');
