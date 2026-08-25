@@ -59,19 +59,29 @@ final class OrganizationPolicyEnforcer implements ResetInterface
 
     private function verify(OrganizationReadModel $organization, User $user): UnmetPolicies
     {
-        // Policies apply to members. Non-members are refused by the voter on membership grounds instead.
+        // Read model only: indexed lookups, where replaying the stream would load the org's whole history
+        // for a page view.
         $member = $this->organizationMemberRepo->findOneByOrgAndUser($organization->id, $user->getId());
-        if ($member === null) {
+        $isOwner = $this->organizationTeamMemberRepo->isOwner($organization->ownersTeamId, $user->getId());
+
+        // Policies apply to members, and the voter refuses a non-member on membership grounds. Ownership is
+        // the exception: it is decided from a different table, written in the same transaction, so an owner
+        // the membership does not know means a projection fell behind or rows arrived from outside the
+        // stream. The standing 2FA rule for owners has to answer that case rather than wave them through,
+        // since the voter grants management off the same ownership row.
+        if ($member === null && !$isOwner) {
             return UnmetPolicies::none();
         }
 
-        // Read model only: three indexed lookups, where replaying the stream would load the org's whole
-        // history for a page view.
         $unmet = $this->organizationPolicyRepo->policiesFor($organization->id)->unmetBy(
-            $this->facts->forUser($user)->withOwnership(
-                $this->organizationTeamMemberRepo->isOwner($organization->ownersTeamId, $user->getId()),
-            ),
+            $this->facts->forUser($user)->withOwnership($isOwner),
         );
+
+        // No row to compare against or correct, and the aggregate cannot speak for a membership it does not
+        // know either, so the verdict simply stands for this request.
+        if ($member === null) {
+            return $unmet;
+        }
 
         if ($unmet->equals($member->suspendedPolicies)) {
             return $unmet;
