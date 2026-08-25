@@ -61,7 +61,8 @@ final readonly class MemberPolicyComplianceFailed implements DomainEvent
      */
     public static function fromPayload(Ulid $organizationId, array $payload): self
     {
-        // A single `reason` is the original payload shape. History is never rewritten, so both replay.
+        // A single `reason` is the shape this event had before it carried a set. Only dev and staging
+        // streams written mid-branch have it, never production, so this fallback can go once those are gone.
         $reasons = $payload['reasons'] ?? (isset($payload['reason']) ? [$payload['reason']] : []);
 
         return new self(
