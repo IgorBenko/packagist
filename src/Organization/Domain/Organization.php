@@ -159,8 +159,8 @@ final class Organization extends AbstractAggregate
             throw new TwoFactorRequiredException('You must enable two-factor authentication on your own account before requiring it from the organization.');
         }
 
-        if ($emailDomainsChanged && !$desired->allowedEmailDomains->isEmpty() && !$desired->allowedEmailDomains->matches($actorFacts->emailDomain)) {
-            throw new EmailDomainMismatchException('Your own account email address must be on one of the domains you require, otherwise saving this would suspend you from your own organization.');
+        if ($emailDomainsChanged && !$desired->allowedEmailDomains->isEmpty()) {
+            $this->assertOwnersOnAllowedDomains($desired->allowedEmailDomains, $actorFacts, $memberFacts);
         }
 
         if ($twoFactorChanged) {
@@ -172,6 +172,49 @@ final class Organization extends AbstractAggregate
         }
 
         $this->reverifyMembers($memberFacts);
+    }
+
+    /**
+     * A domain requirement may not suspend an owner, not only the one saving it. Unlike 2FA, the remedy is
+     * an address on a domain somebody else picked, so an owner left outside the set cannot restore
+     * themselves and would need a co-owner or a Packagist admin to undo the policy for them.
+     *
+     * The uncovered domains are named because the acting owner has to widen the set or replace the owner,
+     * and cannot see member addresses anywhere in the UI. Addresses themselves stay unmentioned.
+     *
+     * @param array<int, MemberPolicyFacts> $memberFacts userId => facts, for every current member
+     *
+     * @throws EmailDomainMismatchException
+     */
+    private function assertOwnersOnAllowedDomains(AllowedEmailDomains $domains, MemberPolicyFacts $actorFacts, array $memberFacts): void
+    {
+        // Ownership comes from the aggregate, never the passed facts. Checked first so the common case, an
+        // owner excluding themselves, is told so directly rather than through the list below.
+        if ($this->isOwner($actorFacts->userId) && !$domains->matches($actorFacts->emailDomain)) {
+            throw new EmailDomainMismatchException('Your own account email address must be on one of the domains you require, otherwise saving this would suspend you from your own organization.');
+        }
+
+        $uncovered = [];
+        foreach ($this->members as $userId) {
+            // An owner whose facts are missing cannot be judged, as in reverifyMembers().
+            if (!$this->isOwner($userId) || !isset($memberFacts[$userId])) {
+                continue;
+            }
+
+            $emailDomain = $memberFacts[$userId]->emailDomain;
+            if (!$domains->matches($emailDomain)) {
+                $uncovered[$emailDomain ?? '(no address on record)'] = true;
+            }
+        }
+
+        if ($uncovered !== []) {
+            ksort($uncovered);
+
+            throw new EmailDomainMismatchException(sprintf(
+                'Every organization owner needs an account email address on one of the domains you require, otherwise saving this would suspend an owner from their own organization. Not covered: %s.',
+                implode(', ', array_keys($uncovered)),
+            ));
+        }
     }
 
     /**
