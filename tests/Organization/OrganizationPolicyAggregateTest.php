@@ -316,6 +316,69 @@ class OrganizationPolicyAggregateTest extends TestCase
         self::assertTrue($organization->unmetPoliciesFor(self::MEMBER)->isEmpty());
     }
 
+    public function testADomainRequirementCannotSuspendACoOwner(): void
+    {
+        $organization = $this->orgWithSecondOwner();
+
+        // The acting owner is on example.org and would keep their access; the co-owner is not, and their
+        // remedy would be an address on a domain they may have no way to get.
+        try {
+            $organization->setPolicies(
+                $organization->policies()->withAllowedEmailDomains(new AllowedEmailDomains('example.org')),
+                self::actor(),
+                [
+                    self::OWNER => new MemberPolicyFacts(self::OWNER, true, emailDomain: 'example.org'),
+                    self::MEMBER => new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'gmail.com'),
+                ],
+            );
+            self::fail('Requiring a domain a co-owner is not on should have been refused.');
+        } catch (EmailDomainMismatchException $e) {
+            self::assertStringContainsString('Not covered: gmail.com.', $e->getMessage());
+        }
+
+        self::assertSame([], $organization->pullPendingEvents());
+        self::assertTrue($organization->policies()->allowedEmailDomains->isEmpty());
+    }
+
+    public function testADomainRequirementMaySuspendAPlainMember(): void
+    {
+        $organization = $this->orgWithSecondMember();
+
+        // The same set, with the off-domain member holding no ownership: suspending them is the point of
+        // the policy, so only the owners team is protected.
+        $organization->setPolicies(
+            $organization->policies()->withAllowedEmailDomains(new AllowedEmailDomains('example.org')),
+            self::actor(),
+            [
+                self::OWNER => new MemberPolicyFacts(self::OWNER, true, emailDomain: 'example.org'),
+                self::MEMBER => new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'gmail.com'),
+            ],
+        );
+
+        $events = $organization->pullPendingEvents();
+        self::assertCount(2, $events);
+        self::assertInstanceOf(AllowedEmailDomainsEdited::class, $events[0]);
+        self::assertInstanceOf(MemberPolicyComplianceFailed::class, $events[1]);
+        self::assertSame(self::MEMBER, $events[1]->userId);
+    }
+
+    public function testAnActorWhoIsNotAnOwnerIsJudgedByTheOwnersInstead(): void
+    {
+        $organization = $this->orgWithSecondMember();
+
+        // A packagist-admin acting on the org: they are not a member, so no domain set can suspend them and
+        // their own address has no bearing on what the org may require.
+        $organization->setPolicies(
+            $organization->policies()->withAllowedEmailDomains(new AllowedEmailDomains('example.org')),
+            new MemberPolicyFacts(99, true, emailDomain: 'packagist.com'),
+            [self::OWNER => new MemberPolicyFacts(self::OWNER, true, emailDomain: 'example.org')],
+        );
+
+        $events = $organization->pullPendingEvents();
+        self::assertCount(1, $events);
+        self::assertInstanceOf(AllowedEmailDomainsEdited::class, $events[0]);
+    }
+
     public function testOnlyTheChangedPolicyIsGuarded(): void
     {
         $organization = $this->orgWithSecondMember();
@@ -365,12 +428,18 @@ class OrganizationPolicyAggregateTest extends TestCase
         return Organization::reconstitute(new Ulid(), $this->bootstrapHistory());
     }
 
+    /** An org whose second member is an owner too, for the guards that answer for the whole owners team. */
+    private function orgWithSecondOwner(): Organization
+    {
+        return Organization::reconstitute(new Ulid(), $this->bootstrapHistory(secondOwner: true));
+    }
+
     /**
      * The creation sequence plus a second member who joined through an invitation.
      *
      * @return list<array{type: OrganizationEventType, payload: array<string, mixed>}>
      */
-    private function bootstrapHistory(): array
+    private function bootstrapHistory(bool $secondOwner = false): array
     {
         $ownersTeamId = new Ulid();
         $allMembersTeamId = new Ulid();
@@ -389,6 +458,7 @@ class OrganizationPolicyAggregateTest extends TestCase
             ['type' => OrganizationEventType::TeamMemberAdded, 'payload' => ['teamId' => $allMembersTeamId->toRfc4122(), 'userId' => self::OWNER]],
             ['type' => OrganizationEventType::MemberJoined, 'payload' => ['userId' => self::MEMBER]],
             ['type' => OrganizationEventType::TeamMemberAdded, 'payload' => ['teamId' => $allMembersTeamId->toRfc4122(), 'userId' => self::MEMBER]],
+            ...($secondOwner ? [['type' => OrganizationEventType::TeamMemberAdded, 'payload' => ['teamId' => $ownersTeamId->toRfc4122(), 'userId' => self::MEMBER]]] : []),
         ];
     }
 }
