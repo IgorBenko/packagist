@@ -341,6 +341,29 @@ class OrganizationPolicyTest extends IntegrationTestCase
         );
     }
 
+    public function testResettingTheEnforcerDropsTheRequestMemo(): void
+    {
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+        $member = $this->joinAsMember($organization, 'plainmember', withTwoFactor: false);
+
+        $this->policyManager()->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
+
+        $enforcer = $this->enforcer();
+        self::assertSame([PolicyComplianceReason::TwoFactor], $enforcer->enforce($organization, $member)->reasons);
+
+        $member->setTotpSecret('totp-secret');
+        static::getEM()->flush();
+
+        // Memoized, so within the request the same instance stands by its answer rather than re-querying
+        // for every voter call a page render makes.
+        self::assertSame([PolicyComplianceReason::TwoFactor], $enforcer->enforce($organization, $member)->reasons);
+
+        // A worker runtime hands the same instance to the next request, which must not inherit that.
+        $enforcer->reset();
+        self::assertTrue($enforcer->enforce($organization, $member)->isEmpty());
+    }
+
     private function createOrg(User $owner): OrganizationReadModel
     {
         static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);
