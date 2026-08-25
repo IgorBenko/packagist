@@ -24,7 +24,9 @@ use App\Organization\Domain\Exception\TwoFactorRequiredException;
 use App\Organization\Domain\Organization;
 use App\Organization\Domain\PolicyComplianceReason;
 use App\Organization\Domain\PolicyRemediation;
+use App\Organization\Domain\DisplayName;
 use App\Organization\EventStore\Actor;
+use App\Organization\EventStore\ConcurrencyException;
 use App\Organization\EventStore\EventStore;
 use App\Organization\OrganizationManager;
 use App\Organization\OrganizationPolicyEnforcer;
@@ -356,6 +358,35 @@ class OrganizationPolicyTest extends IntegrationTestCase
         static::getEM()->flush();
 
         self::assertSame([PolicyComplianceReason::TwoFactor], $this->enforcer()->enforce($organization, $owner)->reasons);
+    }
+
+    public function testALostRaceDetachesWhatTheRequestWasHolding(): void
+    {
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+
+        $eventStore = static::getService(EventStore::class);
+        $history = $eventStore->loadHistory($organization->id);
+
+        // Two actors that read the same history, so the second one's sequence is already taken by the time
+        // it appends.
+        $winner = Organization::reconstitute($organization->id, $history);
+        $loser = Organization::reconstitute($organization->id, $history);
+
+        $winner->changeName(new DisplayName('ACME Inc'));
+        $eventStore->append($winner, Actor::member($owner), null);
+
+        $loser->changeName(new DisplayName('ACME GmbH'));
+
+        $this->expectException(ConcurrencyException::class);
+
+        try {
+            $eventStore->append($loser, Actor::member($owner), null);
+        } finally {
+            // Why OrganizationPolicyEnforcer does not swallow this: the failing flush closes the manager, so
+            // the append resets it and the entities the request was working with are detached.
+            self::assertFalse(static::getEM()->contains($owner));
+        }
     }
 
     public function testResettingTheEnforcerDropsTheRequestMemo(): void

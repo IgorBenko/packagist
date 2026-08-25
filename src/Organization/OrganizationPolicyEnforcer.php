@@ -49,6 +49,9 @@ final class OrganizationPolicyEnforcer implements ResetInterface
     /**
      * Every policy the member fails, empty when they comply or are not a member at all. Memoized because a
      * page render consults the voter many times and only a genuine change may write to the stream.
+     *
+     * @throws ConcurrencyException another request recorded this member's transition first, see
+     *                              {@see recordTransition()} for why that ends the request
      */
     public function enforce(OrganizationReadModel $organization, User $user): UnmetPolicies
     {
@@ -97,6 +100,14 @@ final class OrganizationPolicyEnforcer implements ResetInterface
     /**
      * Only this path pays for the aggregate, which re-derives the verdict from its own view of ownership and
      * decides what gets recorded. Empty when it sees nothing to fix, or does not know the member.
+     *
+     * A lost race is deliberately not caught here. The failing flush closes the EntityManager, so the append
+     * has to reset it, which detaches everything this request holds, including the security token's user:
+     * carrying on would fail later, somewhere unrelated, on the first persist() that touches one of them.
+     * Failing here instead costs the loser its request, and its retry finds the winner's transition already
+     * recorded and writes nothing.
+     *
+     * @throws ConcurrencyException another request recorded this member's transition first
      */
     private function recordTransition(OrganizationReadModel $organization, User $user): UnmetPolicies
     {
@@ -106,13 +117,7 @@ final class OrganizationPolicyEnforcer implements ResetInterface
         );
 
         $aggregate->verifyMemberCompliance($this->facts->forUser($user));
-
-        try {
-            $this->eventStore->append($aggregate, Actor::automation(), null);
-        } catch (ConcurrencyException) {
-            // Another request resolved this org's stream first. The verdict below is still the right answer
-            // for this request; persisting the transition can wait for the next one.
-        }
+        $this->eventStore->append($aggregate, Actor::automation(), null);
 
         return $aggregate->unmetPoliciesFor($user->getId());
     }
