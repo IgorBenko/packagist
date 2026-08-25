@@ -41,14 +41,23 @@ final readonly class UnmetPolicies
     }
 
     /**
+     * A value no longer recognised is skipped rather than refused. These sets come out of a JSON column and
+     * out of immutable event payloads, so retiring a policy must not turn every read of an affected member
+     * row, or every replay of that org's stream, into a ValueError.
+     *
      * @param list<string> $values
      */
     public static function fromValues(array $values): self
     {
-        return new self(...array_map(
-            static fn (string $value): PolicyComplianceReason => PolicyComplianceReason::from($value),
-            $values,
-        ));
+        $reasons = [];
+        foreach ($values as $value) {
+            $reason = PolicyComplianceReason::tryFrom($value);
+            if ($reason !== null) {
+                $reasons[] = $reason;
+            }
+        }
+
+        return new self(...$reasons);
     }
 
     /**

@@ -64,6 +64,17 @@ class UnmetPoliciesTest extends TestCase
         self::assertTrue(UnmetPolicies::fromValues([])->isEmpty());
     }
 
+    public function testStoredValuesSurviveARetiredPolicy(): void
+    {
+        // A member row or an event payload written while a since-retired policy existed: the rest of the set
+        // still has to load, or reading that member would fail outright.
+        self::assertSame(
+            [PolicyComplianceReason::TwoFactor],
+            UnmetPolicies::fromValues(['two_factor', 'github_org'])->reasons,
+        );
+        self::assertTrue(UnmetPolicies::fromValues(['github_org'])->isEmpty());
+    }
+
     /**
      * The payload written while a member could only fail one policy at a time. History is never rewritten,
      * so both shapes have to replay into the same event.
