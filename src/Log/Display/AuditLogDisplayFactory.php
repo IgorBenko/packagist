@@ -65,7 +65,6 @@ use App\Log\Display\Event\VersionDeletedDisplay;
 use App\Log\Display\Event\VersionRecoveredDisplay;
 use App\Log\Display\Event\VersionReferenceChangeBlockedDisplay;
 use App\Log\Display\Event\VersionSoftDeletedDisplay;
-use App\Organization\Domain\PolicyComplianceReason;
 use App\Organization\Domain\UnmetPolicies;
 use Symfony\Bundle\SecurityBundle\Security;
 
@@ -553,15 +552,9 @@ class AuditLogDisplayFactory
             return UnmetPolicies::none();
         }
 
-        $reasons = [];
-        foreach ($policies as $value) {
-            $reason = PolicyComplianceReason::tryFrom(strval($value));
-            if ($reason !== null) {
-                $reasons[] = $reason;
-            }
-        }
-
-        return new UnmetPolicies(...$reasons);
+        // fromValues() skips what it does not recognise, which is what a record naming a retired policy
+        // needs, so the tolerance lives in one place rather than being repeated here.
+        return UnmetPolicies::fromValues(array_values(array_map(strval(...), $policies)));
     }
 
     /**
