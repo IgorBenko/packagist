@@ -76,8 +76,8 @@ class UnmetPoliciesTest extends TestCase
     }
 
     /**
-     * The payload written while a member could only fail one policy at a time. History is never rewritten,
-     * so both shapes have to replay into the same event.
+     * The payload written while a member could only fail one policy at a time. It exists in dev and staging
+     * streams written mid-branch, so both shapes have to replay into the same event until those are gone.
      */
     public function testComplianceFailedReplaysTheSingleReasonPayload(): void
     {
