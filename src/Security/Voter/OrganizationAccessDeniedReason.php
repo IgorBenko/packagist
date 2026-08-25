@@ -36,7 +36,8 @@ enum OrganizationAccessDeniedReason
 
     /**
      * A member suspended for failing policies that cannot be answered with one remedy, so they are sent to
-     * the organization overview, which lists all of them. A single failure reports its own reason instead.
+     * the organization's suspension page, which lists all of them. A single failure reports its own reason
+     * instead.
      */
     case PolicySuspended;
 

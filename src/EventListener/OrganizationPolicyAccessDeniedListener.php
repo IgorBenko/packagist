@@ -66,11 +66,11 @@ class OrganizationPolicyAccessDeniedListener
 
     private function redirectFor(OrganizationAccessDeniedReason $reason, User $user, Request $request): ?string
     {
-        // A suspended member still has View, so send them to the org overview: it lists what they must do
-        // to have their access restored. Without a slug to redirect to, the bare 403 stands.
+        // A suspended member still has View, so send them to the page that lists what they must do to have
+        // their access restored. Without a slug to redirect to, the bare 403 stands.
         $slug = $request->attributes->get('organization');
         if ($reason === OrganizationAccessDeniedReason::PolicySuspended && \is_string($slug)) {
-            return $this->router->generate('organization_show', ['organization' => $slug]);
+            return $this->router->generate('organization_suspended', ['organization' => $slug]);
         }
 
         if ($reason === OrganizationAccessDeniedReason::TwoFactorRequired) {

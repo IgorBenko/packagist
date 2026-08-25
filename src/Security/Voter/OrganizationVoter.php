@@ -105,8 +105,10 @@ class OrganizationVoter extends Voter
             return $standing;
         }
 
-        // A suspended member keeps View, which is where they are told what to fix, and Leave, so they are
-        // never trapped.
+        // View is exempt for two reasons: it guards the page that explains the suspension, which therefore
+        // cannot be denied for it, and the argument resolvers use it as a plain "is this org visible to
+        // you" check, where a policy failure would surface as a misleading 404. Leave is exempt so a
+        // suspended member is never trapped.
         if (\in_array($action, [OrganizationActions::View, OrganizationActions::Leave], true)) {
             return null;
         }
@@ -125,8 +127,8 @@ class OrganizationVoter extends Voter
             return null;
         }
 
-        // Several failures cannot be answered with one remedy, so the listener sends them to the overview,
-        // which lists all of them.
+        // Several failures cannot be answered with one remedy, so the listener sends them to the suspension
+        // page, which lists all of them.
         $sole = $unmet->sole();
         if ($sole === null) {
             return OrganizationAccessDeniedReason::PolicySuspended;
