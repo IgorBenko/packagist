@@ -420,12 +420,9 @@ class AuditRecord
 
     /**
      * A member's access was suspended for failing an active org policy, or restored once they satisfied it
-     * again. Which policy they failed is deliberately absent: publishing it would tell everyone which
-     * security control that member is missing. Org members see the reason on the members list instead.
-     */
-    /**
-     * The policies are recorded so the org's own audit log can say what a member has to fix. Whether they are
-     * rendered is {@see \App\Audit\Display\AuditLogDisplayFactory}'s call, not this record's.
+     * again. The policies are recorded so the org's own audit log can say what the member has to fix;
+     * whether they are shown is {@see \App\Audit\Display\AuditLogDisplayFactory}'s call, which keeps them
+     * off the public transparency log so it cannot advertise who is missing a security control.
      */
     public static function organizationMemberAccessSuspended(Ulid $organizationId, string $slug, string $displayName, ?User $member, UnmetPolicies $unmetPolicies): self
     {
