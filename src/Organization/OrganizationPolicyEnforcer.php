@@ -22,6 +22,7 @@ use App\Organization\Domain\UnmetPolicies;
 use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\ConcurrencyException;
 use App\Organization\EventStore\EventStore;
+use Predis\Client;
 use Symfony\Contracts\Service\ResetInterface;
 
 /**
@@ -34,6 +35,11 @@ use Symfony\Contracts\Service\ResetInterface;
  */
 final class OrganizationPolicyEnforcer implements ResetInterface
 {
+    /** More than any honest run of policy changes; what it bounds is a member flipping their own facts. */
+    private const int MAX_TRANSITIONS = 10;
+
+    private const int TRANSITION_WINDOW = 3600; // in seconds
+
     /** @var array<string, UnmetPolicies> "orgId:userId" => verdict, memoized for the request */
     private array $verified = [];
 
@@ -43,6 +49,7 @@ final class OrganizationPolicyEnforcer implements ResetInterface
         private readonly OrganizationTeamMemberRepository $organizationTeamMemberRepo,
         private readonly OrganizationPolicyRepository $organizationPolicyRepo,
         private readonly MemberPolicyFactsResolver $facts,
+        private readonly Client $redisCache,
     ) {
     }
 
@@ -90,6 +97,14 @@ final class OrganizationPolicyEnforcer implements ResetInterface
             return $unmet;
         }
 
+        // A flip writes to the org's stream and audit log from a plain page view, so a member turning their
+        // own second factor off and on can produce a pair of records per cycle. Past the cap the verdict
+        // below still governs access; only the bookkeeping waits, and once the window passes it records
+        // whichever state the member actually settled on.
+        if (!$this->mayRecordTransition($organization, $user)) {
+            return $unmet;
+        }
+
         // The aggregate's view of ownership is authoritative, but it can only speak for a member it knows:
         // a stream that cannot confirm the membership must not hand back access the read model refused.
         $recorded = $this->recordTransition($organization, $user);
@@ -120,6 +135,23 @@ final class OrganizationPolicyEnforcer implements ResetInterface
         $this->eventStore->append($aggregate, Actor::automation(), null);
 
         return $aggregate->unmetPoliciesFor($user->getId());
+    }
+
+    /**
+     * Bounded per member per org, in the shape {@see \App\Security\TwoFactorAuthRateLimiter} uses. The
+     * window starts with the first transition rather than sliding, so a member who reaches the cap honestly
+     * is recorded again once it passes instead of staying stale for as long as they keep browsing.
+     */
+    private function mayRecordTransition(OrganizationReadModel $organization, User $user): bool
+    {
+        $key = 'org-policy-transitions:'.$organization->id->toRfc4122().':'.$user->getId();
+
+        $count = (int) $this->redisCache->incr($key);
+        if ($count === 1) {
+            $this->redisCache->expire($key, self::TRANSITION_WINDOW);
+        }
+
+        return $count <= self::MAX_TRANSITIONS;
     }
 
     /**
