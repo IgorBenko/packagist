@@ -126,7 +126,15 @@ class MenuBuilder
             'label' => '<span class="icon-chart"></span>'.$this->translator->trans('menu.organization_overview'),
             'route' => 'organization_show',
             'routeParameters' => ['organization' => $slug],
-            'extras' => ['safe_label' => true, 'translation_domain' => false],
+            'extras' => [
+                'safe_label' => true,
+                'translation_domain' => false,
+                // The suspension notice stands in for the overview, so it keeps this entry current.
+                'routes' => [
+                    ['route' => 'organization_show', 'parameters' => ['organization' => $slug]],
+                    ['route' => 'organization_suspended', 'parameters' => ['organization' => $slug]],
+                ],
+            ],
         ]);
         $menu->addChild($this->translator->trans('menu.organization_teams'), [
             'label' => '<span class="icon-users"></span>'.$this->translator->trans('menu.organization_teams'),

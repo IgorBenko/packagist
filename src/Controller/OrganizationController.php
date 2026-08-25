@@ -51,6 +51,7 @@ use App\Organization\Domain\UnmetPolicies;
 use App\Organization\InvitationManager;
 use App\Organization\OrganizationManager;
 use App\Organization\OrganizationMembershipManager;
+use App\Organization\OrganizationPolicyEnforcer;
 use App\Organization\OrganizationPolicyManager;
 use App\QueryFilter\AuditLog\ActorFilter;
 use App\QueryFilter\AuditLog\AuditRecordTypeFilter;
@@ -78,6 +79,7 @@ class OrganizationController extends Controller
         private readonly OrganizationManager $organizationManager,
         private readonly OrganizationMembershipManager $membershipManager,
         private readonly OrganizationPolicyManager $policyManager,
+        private readonly OrganizationPolicyEnforcer $policyEnforcer,
         private readonly InvitationManager $invitationManager,
         private readonly OrganizationRepository $organizationRepo,
         private readonly OrganizationPolicyRepository $organizationPolicyRepo,
@@ -104,21 +106,37 @@ class OrganizationController extends Controller
     #[Route(path: '/organizations/{organization}', name: 'organization_show', methods: ['GET'], requirements: ['organization' => Slug::PATTERN])]
     public function show(Organization $organization, #[CurrentUser] User $user): Response
     {
-        // Null for a packagist-admin viewing an org they do not belong to; they have nothing to comply with.
-        $member = $this->organizationMemberRepo->findOneByOrgAndUser($organization->id, $user->getId());
-        $unmetPolicies = $member !== null ? $member->suspendedPolicies : UnmetPolicies::none();
-
-        // A suspended member keeps this route so they can be told what to fix, but the overview is not what
-        // they need: they get a page of their own.
-        if (!$unmetPolicies->isEmpty()) {
-            return $this->render('organization/suspended.html.twig', [
-                'organization' => $organization,
-                'remediations' => $this->organizationPolicyRepo->policiesFor($organization->id)->remediationsFor($unmetPolicies),
-            ]);
+        // Re-verified rather than read off the member row: this route is exempt from the voter's compliance
+        // check (see OrganizationVoter::denialReason()), so nothing else establishes the verdict, and a
+        // stored one would keep the notice up for a member who has already met the policy.
+        if (!$this->policyEnforcer->enforce($organization, $user)->isEmpty()) {
+            return $this->redirectToRoute('organization_suspended', ['organization' => $organization->slug]);
         }
 
         return $this->render('organization/show.html.twig', [
             'organization' => $organization,
+        ]);
+    }
+
+    /**
+     * Where a suspended member is told what to fix, and the one org page a suspension does not close: the
+     * voter exempts View, so this page cannot be denied for the very policies it is explaining.
+     */
+    #[IsGranted(OrganizationActions::View->value, 'organization')]
+    #[Route(path: '/organizations/{organization}/suspended', name: 'organization_suspended', methods: ['GET'], requirements: ['organization' => Slug::PATTERN])]
+    public function suspended(Organization $organization, #[CurrentUser] User $user): Response
+    {
+        $unmetPolicies = $this->policyEnforcer->enforce($organization, $user);
+
+        // Nothing left to answer: they have complied since, or never were suspended (a packagist-admin
+        // viewing an org they do not belong to has nothing to comply with).
+        if ($unmetPolicies->isEmpty()) {
+            return $this->redirectToRoute('organization_show', ['organization' => $organization->slug]);
+        }
+
+        return $this->render('organization/suspended.html.twig', [
+            'organization' => $organization,
+            'remediations' => $this->organizationPolicyRepo->policiesFor($organization->id)->remediationsFor($unmetPolicies),
         ]);
     }
 
