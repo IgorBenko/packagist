@@ -360,6 +360,40 @@ class OrganizationPolicyTest extends IntegrationTestCase
         self::assertSame([PolicyComplianceReason::TwoFactor], $this->enforcer()->enforce($organization, $owner)->reasons);
     }
 
+    public function testAFlappingMemberCannotFillTheAuditLogFromPageViews(): void
+    {
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+        $member = $this->joinAsMember($organization, 'plainmember', withTwoFactor: true);
+
+        $this->policyManager()->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
+
+        $enforcer = $this->enforcer();
+
+        // Toggling their own second factor and loading an org page each time: every flip is a transition the
+        // enforcer would otherwise record, from a GET, with nothing bounding it.
+        for ($flip = 0; $flip < 16; ++$flip) {
+            $member->setTotpSecret($flip % 2 === 0 ? null : 'totp-secret');
+            static::getEM()->flush();
+
+            // A fresh request each time, so the memo does not stand in for the re-check.
+            $enforcer->reset();
+            $enforcer->enforce($organization, $member);
+        }
+
+        $recorded = $this->auditCount($organization, 'organization_member_access_suspended')
+            + $this->auditCount($organization, 'organization_member_access_restored');
+
+        self::assertGreaterThan(0, $recorded, 'The first transitions are still recorded.');
+        self::assertLessThanOrEqual(10, $recorded, 'Recording is capped per member per window.');
+
+        // Access is decided from the current facts either way, not from the row the cap left behind.
+        $member->setTotpSecret(null);
+        static::getEM()->flush();
+        $enforcer->reset();
+        self::assertSame([PolicyComplianceReason::TwoFactor], $enforcer->enforce($organization, $member)->reasons);
+    }
+
     public function testALostRaceDetachesWhatTheRequestWasHolding(): void
     {
         $owner = $this->persistUser('orgowner', withTwoFactor: true);
