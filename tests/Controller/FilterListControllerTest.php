@@ -12,13 +12,13 @@
 
 namespace App\Tests\Controller;
 
-use App\Audit\AuditRecordType;
 use App\Entity\AuditRecord;
 use App\Entity\FilterListEntry;
 use App\FilterList\FilterLists;
 use App\FilterList\FilterSources;
 use App\FilterList\RemoteFilterListEntry;
 use App\Form\Model\FilterListEntryRequest;
+use App\Log\AuditLogEventType;
 use App\Tests\IntegrationTestCase;
 use PHPUnit\Framework\Attributes\TestWith;
 
@@ -117,7 +117,7 @@ class FilterListControllerTest extends IntegrationTestCase
         static::assertNotNull($refreshed);
         static::assertTrue($refreshed->isDisabled());
 
-        $audit = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditRecordType::FilterListEntryDisabled]);
+        $audit = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditLogEventType::FilterListEntryDisabled]);
         static::assertNotNull($audit);
         static::assertSame('vendor/false-positive', $audit->attributes['entry']['package_name']);
 
@@ -151,7 +151,7 @@ class FilterListControllerTest extends IntegrationTestCase
         static::assertNotNull($refreshed);
         static::assertFalse($refreshed->isDisabled());
 
-        $audit = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditRecordType::FilterListEntryEnabled]);
+        $audit = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditLogEventType::FilterListEntryEnabled]);
         static::assertNotNull($audit);
     }
 
@@ -182,7 +182,7 @@ class FilterListControllerTest extends IntegrationTestCase
         static::assertSame('malware', $refreshed->getReason(), 'Upstream-supplied reason is preserved across an admin edit.');
         static::assertTrue($refreshed->isOverwritten());
 
-        $audit = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditRecordType::FilterListEntryEdited]);
+        $audit = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditLogEventType::FilterListEntryEdited]);
         static::assertNotNull($audit);
         static::assertSame('1.0.0', $audit->attributes['previous']['version']);
         static::assertSame('1.0.0', $audit->attributes['entry']['remote_version']);
@@ -242,7 +242,7 @@ class FilterListControllerTest extends IntegrationTestCase
         static::assertNotNull($refreshed);
         static::assertSame('updated note', $refreshed->getInternalNote());
 
-        $audit = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditRecordType::FilterListEntryEdited]);
+        $audit = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditLogEventType::FilterListEntryEdited]);
         static::assertNotNull($audit);
         static::assertSame('updated note', $audit->attributes['entry']['internal_note']);
         static::assertSame('initial note', $audit->attributes['previous']['internal_note']);
@@ -334,7 +334,7 @@ class FilterListControllerTest extends IntegrationTestCase
         static::assertSame('Reported internally', $created->getReason());
         static::assertSame('Flagged by the abuse team', $created->getInternalNote());
 
-        $audit = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditRecordType::FilterListEntryAdded]);
+        $audit = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditLogEventType::FilterListEntryAdded]);
         static::assertNotNull($audit);
         static::assertSame('vendor/manual-new', $audit->attributes['entry']['package_name']);
         static::assertSame('packagist', $audit->attributes['entry']['source']);
@@ -433,7 +433,7 @@ class FilterListControllerTest extends IntegrationTestCase
         static::assertSame('new reason', $refreshed->getReason());
         static::assertSame('https://example.com/new', $refreshed->getLink());
 
-        $audit = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditRecordType::FilterListEntryEdited]);
+        $audit = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditLogEventType::FilterListEntryEdited]);
         static::assertNotNull($audit);
         // The audit log must capture the prior value of every edited property.
         static::assertSame('1.0.0', $audit->attributes['previous']['version']);
@@ -553,7 +553,7 @@ class FilterListControllerTest extends IntegrationTestCase
         static::assertResponseRedirects('/admin/filter-lists/');
 
         $em = self::getEM();
-        $audits = $em->getRepository(AuditRecord::class)->findBy(['type' => AuditRecordType::FilterListEntryDisabled]);
+        $audits = $em->getRepository(AuditRecord::class)->findBy(['type' => AuditLogEventType::FilterListEntryDisabled]);
         static::assertCount(0, $audits);
     }
 
@@ -574,7 +574,7 @@ class FilterListControllerTest extends IntegrationTestCase
         static::assertResponseRedirects('/admin/filter-lists/');
 
         $em = self::getEM();
-        $audits = $em->getRepository(AuditRecord::class)->findBy(['type' => AuditRecordType::FilterListEntryEnabled]);
+        $audits = $em->getRepository(AuditRecord::class)->findBy(['type' => AuditLogEventType::FilterListEntryEnabled]);
         static::assertCount(0, $audits);
     }
 
@@ -679,7 +679,7 @@ class FilterListControllerTest extends IntegrationTestCase
         static::assertTrue($repo->findOneBy(['publicId' => $second->getPublicId()])?->isDisabled());
         static::assertFalse($repo->findOneBy(['publicId' => $untouched->getPublicId()])?->isDisabled(), 'Unselected entries must remain unchanged.');
 
-        $audits = $em->getRepository(AuditRecord::class)->findBy(['type' => AuditRecordType::FilterListEntryDisabled]);
+        $audits = $em->getRepository(AuditRecord::class)->findBy(['type' => AuditLogEventType::FilterListEntryDisabled]);
         static::assertCount(2, $audits, 'One audit record must be written per disabled entry.');
     }
 
@@ -710,7 +710,7 @@ class FilterListControllerTest extends IntegrationTestCase
         static::assertFalse($repo->findOneBy(['publicId' => $first->getPublicId()])?->isDisabled());
         static::assertFalse($repo->findOneBy(['publicId' => $second->getPublicId()])?->isDisabled());
 
-        $audits = $em->getRepository(AuditRecord::class)->findBy(['type' => AuditRecordType::FilterListEntryEnabled]);
+        $audits = $em->getRepository(AuditRecord::class)->findBy(['type' => AuditLogEventType::FilterListEntryEnabled]);
         static::assertCount(2, $audits);
     }
 
@@ -735,7 +735,7 @@ class FilterListControllerTest extends IntegrationTestCase
         static::assertResponseRedirects('/admin/filter-lists/');
 
         $em = self::getEM();
-        $audits = $em->getRepository(AuditRecord::class)->findBy(['type' => AuditRecordType::FilterListEntryDisabled]);
+        $audits = $em->getRepository(AuditRecord::class)->findBy(['type' => AuditLogEventType::FilterListEntryDisabled]);
         static::assertCount(1, $audits, 'Only the entry that actually changed state must be audited.');
     }
 
@@ -818,7 +818,7 @@ class FilterListControllerTest extends IntegrationTestCase
         static::assertResponseRedirects('/admin/filter-lists/');
 
         $em = self::getEM();
-        $audits = $em->getRepository(AuditRecord::class)->findBy(['type' => AuditRecordType::FilterListEntryDisabled]);
+        $audits = $em->getRepository(AuditRecord::class)->findBy(['type' => AuditLogEventType::FilterListEntryDisabled]);
         static::assertCount(0, $audits);
     }
 
