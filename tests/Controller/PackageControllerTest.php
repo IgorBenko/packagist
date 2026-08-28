@@ -12,7 +12,6 @@
 
 namespace App\Tests\Controller;
 
-use App\Audit\AuditRecordType;
 use App\Audit\VersionDeletionReason;
 use App\Entity\AuditRecord;
 use App\Entity\Job;
@@ -21,6 +20,7 @@ use App\Entity\PackageFreezeReason;
 use App\Entity\PackageReadme;
 use App\Entity\User;
 use App\Entity\Version;
+use App\Log\AuditLogEventType;
 use App\Service\Spam\FeatureExtractor;
 use App\Service\Spam\SpamClassifier;
 use App\Tests\IntegrationTestCase;
@@ -71,7 +71,7 @@ class PackageControllerTest extends IntegrationTestCase
         self::assertSame(PackageFreezeReason::Spam, $package->getFreezeReason());
 
         // Freezing goes through the entity, so PackageListener records the transition.
-        $record = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditRecordType::PackageFrozen->value, 'packageId' => $packageId]);
+        $record = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditLogEventType::PackageFrozen->value, 'packageId' => $packageId]);
         self::assertNotNull($record, 'a PackageFrozen audit record should be created');
 
         // Spam suppresses the package, so a purge is scheduled.
@@ -99,7 +99,7 @@ class PackageControllerTest extends IntegrationTestCase
         $package = $em->find(Package::class, $packageId);
         self::assertSame(PackageFreezeReason::Gone, $package->getFreezeReason());
 
-        $record = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditRecordType::PackageFrozen->value, 'packageId' => $packageId]);
+        $record = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditLogEventType::PackageFrozen->value, 'packageId' => $packageId]);
         self::assertNotNull($record, 'a PackageFrozen audit record should be created');
         self::assertSame('gone', $record->attributes['reason']);
         // a manual freeze is attributed to the moderator, unlike the crawler's 'automation'
@@ -237,7 +237,7 @@ class PackageControllerTest extends IntegrationTestCase
         $this->assertTrue($package->isMaintainer($maintainer));
 
         $auditRecord = $em->getRepository(\App\Entity\AuditRecord::class)->findOneBy([
-            'type' => AuditRecordType::MaintainerAdded->value,
+            'type' => AuditLogEventType::MaintainerAdded->value,
             'packageId' => $package->getId(),
             'actorId' => $owner->getId(),
         ]);
@@ -278,7 +278,7 @@ class PackageControllerTest extends IntegrationTestCase
         $this->assertFalse($package->isMaintainer($maintainer));
 
         $auditRecord = $em->getRepository(\App\Entity\AuditRecord::class)->findOneBy([
-            'type' => AuditRecordType::MaintainerRemoved->value,
+            'type' => AuditLogEventType::MaintainerRemoved->value,
             'packageId' => $package->getId(),
             'actorId' => $owner->getId(),
         ]);
@@ -333,7 +333,7 @@ class PackageControllerTest extends IntegrationTestCase
         $this->assertNotContains($john->getId(), $maintainerIds);
 
         $auditRecord = $em->getRepository(\App\Entity\AuditRecord::class)->findOneBy([
-            'type' => AuditRecordType::PackageTransferred->value,
+            'type' => AuditLogEventType::PackageTransferred->value,
             'packageId' => $package->getId(),
         ]);
 

@@ -12,8 +12,8 @@
 
 namespace App\Log\Display;
 
-use App\Audit\TransparencyLogType;
 use App\Entity\PackageTransparencyLog;
+use App\Log\TransparencyLogEventType;
 
 /**
  * Builds display objects for the public package transparency log from already-scrubbed entries.
@@ -44,14 +44,14 @@ class TransparencyLogDisplayFactory extends AbstractLogDisplayFactory
         $attributes = $entry->attributes;
 
         return match ($entry->type) {
-            TransparencyLogType::MaintainerAdded, TransparencyLogType::MaintainerRemoved => new Event\MaintainerChangeDisplay(
+            TransparencyLogEventType::MaintainerAdded, TransparencyLogEventType::MaintainerRemoved => new Event\MaintainerChangeDisplay(
                 $entry->type,
                 $entry->datetime,
                 $attributes['name'],
                 $this->buildActor($attributes['user'] ?? null),
                 $this->buildActor($attributes['actor'] ?? null),
             ),
-            TransparencyLogType::PackageTransferred => new Event\PackageTransferredDisplay(
+            TransparencyLogEventType::PackageTransferred => new Event\PackageTransferredDisplay(
                 $entry->type,
                 $entry->datetime,
                 $attributes['name'],
@@ -59,14 +59,14 @@ class TransparencyLogDisplayFactory extends AbstractLogDisplayFactory
                 $attributes['current_maintainers'] ?? [],
                 $this->buildActor($attributes['actor'] ?? null),
             ),
-            TransparencyLogType::PackageCreated, TransparencyLogType::PackageUnabandoned, TransparencyLogType::PackageUnfrozen => new Event\PackageRepositoryDisplay(
+            TransparencyLogEventType::PackageCreated, TransparencyLogEventType::PackageUnabandoned, TransparencyLogEventType::PackageUnfrozen => new Event\PackageRepositoryDisplay(
                 $entry->type,
                 $entry->datetime,
                 $attributes['name'],
                 $attributes['repository'] ?? null,
                 $this->buildActor($attributes['actor'] ?? null),
             ),
-            TransparencyLogType::CanonicalUrlChanged => new Event\CanonicalUrlChangedDisplay(
+            TransparencyLogEventType::CanonicalUrlChanged => new Event\CanonicalUrlChangedDisplay(
                 $entry->type,
                 $entry->datetime,
                 $attributes['name'],
@@ -74,7 +74,7 @@ class TransparencyLogDisplayFactory extends AbstractLogDisplayFactory
                 $attributes['repository_to'] ?? null,
                 $this->buildActor($attributes['actor'] ?? null),
             ),
-            TransparencyLogType::PackageAbandoned => new Event\PackageAbandonedDisplay(
+            TransparencyLogEventType::PackageAbandoned => new Event\PackageAbandonedDisplay(
                 $entry->type,
                 $entry->datetime,
                 $attributes['name'],
@@ -83,7 +83,7 @@ class TransparencyLogDisplayFactory extends AbstractLogDisplayFactory
                 $attributes['reason'] ?? null,
                 $this->buildActor($attributes['actor'] ?? null),
             ),
-            TransparencyLogType::PackageFrozen => new Event\PackageFrozenDisplay(
+            TransparencyLogEventType::PackageFrozen => new Event\PackageFrozenDisplay(
                 $entry->type,
                 $entry->datetime,
                 $attributes['name'],
@@ -91,7 +91,7 @@ class TransparencyLogDisplayFactory extends AbstractLogDisplayFactory
                 $attributes['reason'] ?? null,
                 $this->buildActor($attributes['actor'] ?? null),
             ),
-            TransparencyLogType::PackageDeleted => new Event\PackageDeletedDisplay(
+            TransparencyLogEventType::PackageDeleted => new Event\PackageDeletedDisplay(
                 $entry->type,
                 $entry->datetime,
                 $attributes['name'],
@@ -99,14 +99,14 @@ class TransparencyLogDisplayFactory extends AbstractLogDisplayFactory
                 $attributes['reason'] ?? null,
                 $this->buildActor($attributes['actor'] ?? null),
             ),
-            TransparencyLogType::VersionCreated, TransparencyLogType::VersionDeleted => new Event\VersionDisplay(
+            TransparencyLogEventType::VersionCreated, TransparencyLogEventType::VersionDeleted => new Event\VersionDisplay(
                 $entry->type,
                 $entry->datetime,
                 $attributes['name'],
                 $attributes['version'],
                 $this->buildActor($attributes['actor'] ?? null),
             ),
-            TransparencyLogType::VersionSoftDeleted => new Event\VersionSoftDeletedDisplay(
+            TransparencyLogEventType::VersionSoftDeleted => new Event\VersionSoftDeletedDisplay(
                 $entry->type,
                 $entry->datetime,
                 $attributes['name'],
@@ -115,7 +115,7 @@ class TransparencyLogDisplayFactory extends AbstractLogDisplayFactory
                 $attributes['reasonText'] ?? null,
                 $this->buildActor($attributes['actor'] ?? null),
             ),
-            TransparencyLogType::VersionRecovered => new Event\VersionRecoveredDisplay(
+            TransparencyLogEventType::VersionRecovered => new Event\VersionRecoveredDisplay(
                 $entry->type,
                 $entry->datetime,
                 $attributes['name'],
@@ -123,7 +123,7 @@ class TransparencyLogDisplayFactory extends AbstractLogDisplayFactory
                 $attributes['previousReason'],
                 $this->buildActor($attributes['actor'] ?? null),
             ),
-            TransparencyLogType::VersionReferenceChangeBlocked => new Event\VersionReferenceChangeBlockedDisplay(
+            TransparencyLogEventType::VersionReferenceChangeBlocked => new Event\VersionReferenceChangeBlockedDisplay(
                 $entry->type,
                 $entry->datetime,
                 $attributes['name'],
@@ -132,9 +132,9 @@ class TransparencyLogDisplayFactory extends AbstractLogDisplayFactory
                 $attributes['ref_to'],
                 $this->buildActor($attributes['actor'] ?? null),
             ),
-            TransparencyLogType::TwoFaActivated, TransparencyLogType::TwoFaDeactivated,
-            TransparencyLogType::PasswordReset, TransparencyLogType::PasswordChanged,
-            TransparencyLogType::EmailChanged, TransparencyLogType::GitHubLinkedWithUser, TransparencyLogType::GitHubDisconnectedFromUser => new Event\MaintainerAccountEventDisplay(
+            TransparencyLogEventType::TwoFactorAuthenticationActivated, TransparencyLogEventType::TwoFactorAuthenticationDeactivated,
+            TransparencyLogEventType::PasswordReset, TransparencyLogEventType::PasswordChanged,
+            TransparencyLogEventType::EmailChanged, TransparencyLogEventType::GitHubLinkedWithUser, TransparencyLogEventType::GitHubDisconnectedFromUser => new Event\MaintainerAccountEventDisplay(
                 $entry->type,
                 $entry->datetime,
                 $attributes['user']['username'],
