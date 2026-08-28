@@ -138,6 +138,7 @@ class TransparencyLogDisplayFactory extends AbstractLogDisplayFactory
                 $entry->type,
                 $entry->datetime,
                 $attributes['user']['username'],
+                $entry->packageName,
                 $this->buildActor($attributes['actor'] ?? null),
             ),
         };
