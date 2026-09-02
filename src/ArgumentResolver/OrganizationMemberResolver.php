@@ -27,8 +27,8 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  * carries the username (not an id) so no user id leaks into URLs. A username that is not a member of
  * the org resolves to a 404, exactly like an unknown one.
  *
- * As defense in depth the organization is loaded first and the current user must be able to read it,
- * so a member only resolves for someone who can view the org.
+ * As defense in depth the organization is loaded first and the current user must belong to it. Standing
+ * only ({@see OrganizationActions::Visible}), so a suspended member is refused by the action, not 404ed.
  *
  * Runs ahead of {@see UserResolver} via a higher service priority.
  */
@@ -57,7 +57,7 @@ final readonly class OrganizationMemberResolver implements ValueResolverInterfac
             throw new NotFoundHttpException('Member not found.');
         }
 
-        if (!$this->security->isGranted(OrganizationActions::View->value, $organization)) {
+        if (!$this->security->isGranted(OrganizationActions::Visible->value, $organization)) {
             throw new NotFoundHttpException('Member not found.');
         }
 
