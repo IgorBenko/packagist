@@ -58,6 +58,7 @@ use Composer\Semver\Constraint\MatchNoneConstraint;
 use Composer\Semver\Constraint\MultiConstraint;
 use Doctrine\ORM\NoResultException;
 use Pagerfanta\Adapter\FixedAdapter;
+use Pagerfanta\Doctrine\ORM\QueryAdapter;
 use Pagerfanta\Pagerfanta;
 use Predis\Client as RedisClient;
 use Predis\Connection\ConnectionException;
