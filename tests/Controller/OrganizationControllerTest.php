@@ -377,39 +377,60 @@ class OrganizationControllerTest extends IntegrationTestCase
         self::assertResponseRedirects('/users/owner/2fa/');
     }
 
-    public function testSuspendedMemberKeepsTheSuspensionPageButLosesEverythingElse(): void
+    public function testSuspendedMemberIsAnsweredWithTheNoticeInPlaceOfThePageTheyAskedFor(): void
     {
         $owner = self::createUser('owner', 'owner@example.org');
         $owner->setTotpSecret('totp-secret');
-        // No TOTP secret: this member fails the policy as soon as it is enabled.
-        $member = self::createUser('member', 'member@example.org');
+        // On another domain, so they fail the policy at once. They keep their second factor: a missing one
+        // names its own remedy and redirects to 2FA setup instead.
+        $member = self::createUser('member', 'member@other.org');
+        $member->setTotpSecret('totp-secret');
         $this->store($owner, $member);
 
         $organization = $this->organizationWithMember($owner, $member);
-        static::getService(OrganizationPolicyManager::class)->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
 
         $this->client->loginUser($member);
 
-        // The overview hands them to the page that names what they owe.
-        $this->client->request('GET', '/organizations/acme');
-        self::assertResponseRedirects('/organizations/acme/suspended');
-
-        $crawler = $this->client->followRedirect();
-        self::assertResponseIsSuccessful();
+        // Refused like every other org page, and the denial itself carries the explanation.
+        $crawler = $this->client->request('GET', '/organizations/acme');
+        self::assertResponseStatusCodeSame(403);
         self::assertStringContainsString('Your access to this organization is suspended', $crawler->filter('.alert')->text());
-        self::assertStringContainsString('Enable two-factor authentication', $crawler->filter('.col-md-9 ul')->text());
+        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.col-md-9 ul')->text());
 
-        // Leaving survives too, so a suspended member is never trapped, and this page offers it directly.
+        // Leaving survives, so they are never trapped, and the notice offers it directly.
         self::assertCount(1, $crawler->filter('a[href="/organizations/acme/members/leave"]'));
         $this->client->request('GET', '/organizations/acme/members/leave');
         self::assertResponseIsSuccessful();
-
-        // Everything else is refused, and 2FA names its own remedy, so they are sent there over a bare 403.
-        $this->client->request('GET', '/organizations/acme/members');
-        self::assertResponseRedirects('/users/member/2fa/');
     }
 
-    public function testTheSuspensionPageClearsItselfOnceTheMemberComplies(): void
+    public function testASuspendedOwnerGetsTheNoticeRatherThanA404FromAnArgumentResolver(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $this->store($owner);
+
+        [$organization, $backend] = $this->createOrganizationWithCustomTeam($owner, 'acme', 'ACME Corp', 'backend');
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
+
+        // The policy cannot be saved on an address outside it, so an owner only falls out afterwards.
+        $owner->setEmail('owner@other.org');
+        $owner->setEmailCanonical('owner@other.org');
+        static::getEM()->flush();
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', sprintf('/organizations/acme/teams/%s/rename', $backend->teamId));
+
+        // The resolver runs ahead of the action's guard and checks standing only, so they are told what
+        // they owe instead of getting a 404 for a team that plainly exists.
+        self::assertResponseStatusCodeSame(403);
+        self::assertStringContainsString('Your access to this organization is suspended', $crawler->filter('.alert')->text());
+        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.col-md-9 ul')->text());
+    }
+
+    public function testTheNoticeClearsItselfOnceTheMemberComplies(): void
     {
         $owner = self::createUser('owner', 'owner@example.org');
         $owner->setTotpSecret('totp-secret');
@@ -423,17 +444,14 @@ class OrganizationControllerTest extends IntegrationTestCase
         $members = static::getService(OrganizationMemberRepository::class);
         self::assertSame(1, $members->countSuspended($organization->id));
 
-        // The remedy the page itself offers. Nothing has re-verified them since, so their row still says
-        // suspended when they come back to it.
+        // The remedy the notice offers. Nothing re-verified them since, so their row still says suspended.
         $member->setTotpSecret('totp-secret');
         static::getEM()->flush();
 
         $this->client->loginUser($member);
-        $this->client->request('GET', '/organizations/acme/suspended');
+        $crawler = $this->client->request('GET', '/organizations/acme');
 
-        // Answered, so it hands them back to the overview instead of repeating a notice they have met.
-        self::assertResponseRedirects('/organizations/acme');
-        $crawler = $this->client->followRedirect();
+        // Answered, so the page renders instead of a notice they have already met.
         self::assertResponseIsSuccessful();
         self::assertStringNotContainsString('Your access to this organization is suspended', $crawler->text());
 
@@ -442,12 +460,11 @@ class OrganizationControllerTest extends IntegrationTestCase
         self::assertSame(0, $members->countSuspended($organization->id));
     }
 
-    public function testAMemberFailingSeveralPoliciesIsSentToTheSuspensionPage(): void
+    public function testAMemberFailingSeveralPoliciesGetsTheNoticeListingAllOfThem(): void
     {
         $owner = self::createUser('owner', 'owner@example.org');
         $owner->setTotpSecret('totp-secret');
-        // No TOTP secret and an address on another domain: no single remedy answers this, so the listener
-        // cannot send them to one page per policy.
+        // No TOTP secret and an address on another domain: no single remedy answers this.
         $member = self::createUser('member', 'member@other.org');
         $this->store($owner, $member);
 
@@ -456,10 +473,10 @@ class OrganizationControllerTest extends IntegrationTestCase
             ->setPolicies($organization, $owner, true, new AllowedEmailDomains('example.org'), null);
 
         $this->client->loginUser($member);
-        $this->client->request('GET', '/organizations/acme/members');
+        $crawler = $this->client->request('GET', '/organizations/acme/members');
 
-        self::assertResponseRedirects('/organizations/acme/suspended');
-        $crawler = $this->client->followRedirect();
+        // So the notice is rendered in place of the members page.
+        self::assertResponseStatusCodeSame(403);
         self::assertStringContainsString('Enable two-factor authentication', $crawler->filter('.col-md-9 ul')->text());
         self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.col-md-9 ul')->text());
     }
