@@ -56,6 +56,8 @@ final readonly class EventStore
      * resolves the invitation aggregate and adds the org membership together). Each aggregate keeps its
      * own sequence; events are appended in the given aggregate order.
      *
+     * An {@see AutomationEvent} in the batch ignores $actor and $ip: nobody triggered it.
+     *
      * @param iterable<AbstractAggregate> $aggregates
      *
      * @throws ConcurrencyException               on an (aggregateId, sequence) conflict; reload and retry
@@ -85,16 +87,20 @@ final readonly class EventStore
                 foreach ($pending as $item) {
                     $event = $item['event'];
 
+                    // Events the aggregate derived on its own must not name whoever triggered the batch.
+                    $eventActor = $event instanceof AutomationEvent ? Actor::automation() : $actor;
+                    $eventIp = $event instanceof AutomationEvent ? null : $ip;
+
                     $stored = new OrganizationEvent(
                         new Ulid(),
                         $item['aggregate']->id,
                         $item['sequence'],
                         $event->eventType(),
                         $event->toPayload(),
-                        $actor->label->value,
+                        $eventActor->label->value,
                         $now,
-                        $actor->userId,
-                        $ip,
+                        $eventActor->userId,
+                        $eventIp,
                     );
 
                     // Flush each event before projecting so the (aggregateId, sequence) constraint
@@ -102,7 +108,7 @@ final readonly class EventStore
                     $em->persist($stored);
                     $em->flush();
 
-                    $recorded = new RecordedEvent($stored->id, $event, $item['sequence'], $actor, $now, $ip);
+                    $recorded = new RecordedEvent($stored->id, $event, $item['sequence'], $eventActor, $now, $eventIp);
                     foreach ($this->projectors as $projector) {
                         $projector->project($recorded);
                     }

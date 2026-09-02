@@ -12,7 +12,7 @@
 
 namespace App\Organization\Domain\Event;
 
-use App\Organization\EventStore\DomainEvent;
+use App\Organization\EventStore\AutomationEvent;
 use App\Organization\EventStore\OrganizationEventType;
 use Symfony\Component\Uid\Ulid;
 
@@ -21,7 +21,7 @@ use Symfony\Component\Uid\Ulid;
  * when the failing policy is disabled or by the inline verification on the member's own request, both
  * automation-triggered with no acting user.
  */
-final readonly class MemberPolicyComplianceRestored implements DomainEvent
+final readonly class MemberPolicyComplianceRestored implements AutomationEvent
 {
     public const OrganizationEventType TYPE = OrganizationEventType::MemberPolicyComplianceRestored;
 
