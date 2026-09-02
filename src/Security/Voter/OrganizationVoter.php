@@ -81,6 +81,7 @@ class OrganizationVoter extends Voter
             // Owners have no visibility into a hidden org, so restore is packagist-admin only.
             OrganizationActions::Restore => OrganizationAccessDeniedReason::AdminOnly,
             OrganizationActions::View,
+            OrganizationActions::Visible,
             OrganizationActions::ViewMembers,
             OrganizationActions::ViewTeams,
             OrganizationActions::Leave => $this->memberDenialReason($organization, $user),
@@ -105,11 +106,9 @@ class OrganizationVoter extends Voter
             return $standing;
         }
 
-        // View is exempt for two reasons: it guards the page that explains the suspension, which therefore
-        // cannot be denied for it, and the argument resolvers use it as a plain "is this org visible to
-        // you" check, where a policy failure would surface as a misleading 404. Leave is exempt so a
-        // suspended member is never trapped.
-        if (\in_array($action, [OrganizationActions::View, OrganizationActions::Leave], true)) {
+        // Leave is exempt so a suspended member is never trapped, Visible is standing only by definition.
+        // Everything else, viewing the org included, requires compliance.
+        if (\in_array($action, [OrganizationActions::Visible, OrganizationActions::Leave], true)) {
             return null;
         }
 
@@ -127,8 +126,7 @@ class OrganizationVoter extends Voter
             return null;
         }
 
-        // Several failures cannot be answered with one remedy, so the listener sends them to the suspension
-        // page, which lists all of them.
+        // No single remedy answers several failures, so the listener renders the notice listing them all.
         $sole = $unmet->sole();
         if ($sole === null) {
             return OrganizationAccessDeniedReason::PolicySuspended;
@@ -137,7 +135,7 @@ class OrganizationVoter extends Voter
         // A match, so a new policy forces a decision here about whether it can name a remedy of its own.
         return match ($sole) {
             PolicyComplianceReason::TwoFactor => OrganizationAccessDeniedReason::TwoFactorRequired,
-            // Changing an account email has no single page worth redirecting to.
+            // Changing an account email has no single page worth redirecting to, so the notice explains it.
             PolicyComplianceReason::EmailDomain => OrganizationAccessDeniedReason::PolicySuspended,
         };
     }

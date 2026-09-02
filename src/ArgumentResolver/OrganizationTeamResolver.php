@@ -26,8 +26,8 @@ use Symfony\Component\Uid\Ulid;
  * Loads an {@see OrganizationTeam} from the `team` route attribute, scoped to the organization named
  * in the same route. A team from another org resolves to a 404 rather than leaking across boundaries.
  *
- * As defense in depth the current user must also be able to read the team's organization, so a team
- * only surfaces to someone who can view that org.
+ * As defense in depth the current user must also belong to the team's organization. Standing only
+ * ({@see OrganizationActions::Visible}), so a suspended member is refused by the action, not 404ed.
  */
 final readonly class OrganizationTeamResolver implements ValueResolverInterface
 {
@@ -56,7 +56,7 @@ final readonly class OrganizationTeamResolver implements ValueResolverInterface
             throw new NotFoundHttpException('Team not found.');
         }
 
-        if (!$this->security->isGranted(OrganizationActions::View->value, $team->organization)) {
+        if (!$this->security->isGranted(OrganizationActions::Visible->value, $team->organization)) {
             throw new NotFoundHttpException('Team not found.');
         }
 

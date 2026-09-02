@@ -12,28 +12,32 @@
 
 namespace App\EventListener;
 
+use App\Entity\Organization;
 use App\Entity\User;
+use App\Organization\OrganizationPolicyEnforcer;
 use App\Security\Voter\OrganizationAccessDeniedReason;
 use Symfony\Bundle\SecurityBundle\Security;
 use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 use Symfony\Component\HttpFoundation\RedirectResponse;
-use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\Session\FlashBagAwareSessionInterface;
 use Symfony\Component\HttpKernel\Event\ExceptionEvent;
 use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
 use Symfony\Component\Security\Core\Exception\AccessDeniedException;
+use Twig\Environment;
 
 /**
- * Turns an organization access denial into a helpful redirect where one exists, e.g. an owner blocked
- * only by missing 2FA (flagged by {@see \App\Security\Voter\OrganizationVoter}) is sent to enable it
- * rather than shown a bare 403.
+ * Turns an organization access denial (flagged by {@see \App\Security\Voter\OrganizationVoter}) into
+ * something the user can act on: an owner blocked only by missing 2FA is sent to enable it, a suspended
+ * member gets the notice listing what they owe. Anything else keeps the bare 403.
  */
 class OrganizationPolicyAccessDeniedListener
 {
     public function __construct(
         private readonly Security $security,
         private readonly UrlGeneratorInterface $router,
+        private readonly OrganizationPolicyEnforcer $policyEnforcer,
+        private readonly Environment $twig,
     ) {
     }
 
@@ -52,32 +56,53 @@ class OrganizationPolicyAccessDeniedListener
             return;
         }
 
+        // The notice states the reason itself, so it is the one response not to also flash it.
+        $notice = $this->suspensionNotice($reason, $throwable->getSubject(), $user);
+        if ($notice !== null) {
+            $event->setResponse($notice);
+            $event->stopPropagation();
+
+            return;
+        }
+
         $session = $event->getRequest()->getSession();
         if ($session instanceof FlashBagAwareSessionInterface) {
             $session->getFlashBag()->add('error', $reason->message());
         }
 
-        $redirect = $this->redirectFor($reason, $user, $event->getRequest());
-        if ($redirect !== null) {
-            $event->setResponse(new RedirectResponse($redirect, Response::HTTP_FOUND));
+        if ($reason === OrganizationAccessDeniedReason::TwoFactorRequired) {
+            $event->setResponse(new RedirectResponse(
+                $this->router->generate('user_2fa_configure', ['name' => $user->getUsername()]),
+                Response::HTTP_FOUND,
+            ));
+
             $event->stopPropagation();
         }
     }
 
-    private function redirectFor(OrganizationAccessDeniedReason $reason, User $user, Request $request): ?string
+    /**
+     * Rendered in place of the page the member asked for rather than as a page of its own, which would
+     * have to be exempt from the very check it explains.
+     */
+    private function suspensionNotice(OrganizationAccessDeniedReason $reason, mixed $organization, User $user): ?Response
     {
-        // A suspended member still has View, so send them to the page that lists what they must do to have
-        // their access restored. Without a slug to redirect to, the bare 403 stands.
-        $slug = $request->attributes->get('organization');
-        if ($reason === OrganizationAccessDeniedReason::PolicySuspended && \is_string($slug)) {
-            return $this->router->generate('organization_suspended', ['organization' => $slug]);
+        if ($reason !== OrganizationAccessDeniedReason::PolicySuspended || !$organization instanceof Organization) {
+            return null;
         }
 
-        if ($reason === OrganizationAccessDeniedReason::TwoFactorRequired) {
-            return $this->router->generate('user_2fa_configure', ['name' => $user->getUsername()]);
+        // The verdict changed under us, and a notice with no remedies explains nothing.
+        $remediations = $this->policyEnforcer->remediationsFor($organization, $user);
+        if ($remediations === []) {
+            return null;
         }
 
-        return null;
+        return new Response(
+            $this->twig->render('organization/suspended.html.twig', [
+                'organization' => $organization,
+                'remediations' => $remediations,
+            ]),
+            Response::HTTP_FORBIDDEN,
+        );
     }
 
     private function getOrganizationAccessDeniedReason(AccessDeniedException $exception): ?OrganizationAccessDeniedReason
