@@ -18,6 +18,7 @@ use App\Entity\OrganizationPolicyRepository;
 use App\Entity\OrganizationTeamMemberRepository;
 use App\Entity\User;
 use App\Organization\Domain\Organization;
+use App\Organization\Domain\PolicyRemediation;
 use App\Organization\Domain\UnmetPolicies;
 use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\ConcurrencyException;
@@ -65,6 +66,22 @@ final class OrganizationPolicyEnforcer implements ResetInterface
         $key = $organization->id->toRfc4122().':'.$user->getId();
 
         return $this->verified[$key] ??= $this->verify($organization, $user);
+    }
+
+    /**
+     * What the member has to do about each policy they fail, empty when they comply. Off the memoized
+     * verdict, so explaining a denial costs a policy lookup and no second evaluation.
+     *
+     * @return list<PolicyRemediation>
+     */
+    public function remediationsFor(OrganizationReadModel $organization, User $user): array
+    {
+        $unmet = $this->enforce($organization, $user);
+        if ($unmet->isEmpty()) {
+            return [];
+        }
+
+        return $this->organizationPolicyRepo->policiesFor($organization->id)->remediationsFor($unmet);
     }
 
     private function verify(OrganizationReadModel $organization, User $user): UnmetPolicies

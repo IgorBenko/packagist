@@ -47,6 +47,12 @@ enum OrganizationActions: string
 
     case View = 'view';
 
+    /**
+     * Membership alone, without the compliance every other action requires. For the argument resolvers,
+     * which run before the action's own guard: on {@see self::View} they would 404 a suspended member.
+     */
+    case Visible = 'visible';
+
     // Any org member may leave on their own.
     case Leave = 'leave';
 }

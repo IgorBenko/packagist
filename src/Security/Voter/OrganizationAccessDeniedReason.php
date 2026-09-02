@@ -35,9 +35,8 @@ enum OrganizationAccessDeniedReason
     case AdminOnly;
 
     /**
-     * A member suspended for failing policies that cannot be answered with one remedy, so they are sent to
-     * the organization's suspension page, which lists all of them. A single failure reports its own reason
-     * instead.
+     * A member suspended for failures no single remedy answers, so the access-denied listener renders the
+     * suspension notice listing them all. A single failure reports its own reason instead.
      */
     case PolicySuspended;
 
