@@ -13,7 +13,7 @@
 namespace App\Organization\Domain\Event;
 
 use App\Organization\Domain\UnmetPolicies;
-use App\Organization\EventStore\DomainEvent;
+use App\Organization\EventStore\AutomationEvent;
 use App\Organization\EventStore\OrganizationEventType;
 use Symfony\Component\Uid\Ulid;
 
@@ -27,7 +27,7 @@ use Symfony\Component\Uid\Ulid;
  * local) or by the inline verification on a member's own request. Both are automation-triggered: the
  * event carries no acting user.
  */
-final readonly class MemberPolicyComplianceFailed implements DomainEvent
+final readonly class MemberPolicyComplianceFailed implements AutomationEvent
 {
     public const OrganizationEventType TYPE = OrganizationEventType::MemberPolicyComplianceFailed;
 
