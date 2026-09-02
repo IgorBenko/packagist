@@ -14,6 +14,7 @@ namespace App\Tests\Organization;
 
 use App\Entity\AuditRecordRepository;
 use App\Entity\Organization as OrganizationReadModel;
+use App\Entity\OrganizationEventRepository;
 use App\Entity\OrganizationMemberRepository;
 use App\Entity\OrganizationPolicyRepository;
 use App\Entity\OrganizationRepository;
@@ -28,6 +29,7 @@ use App\Organization\Domain\DisplayName;
 use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\ConcurrencyException;
 use App\Organization\EventStore\EventStore;
+use App\Organization\EventStore\OrganizationEventType;
 use App\Organization\OrganizationManager;
 use App\Organization\OrganizationPolicyEnforcer;
 use App\Organization\OrganizationPolicyManager;
@@ -78,6 +80,25 @@ class OrganizationPolicyTest extends IntegrationTestCase
 
         // Recorded so the org's own audit log can name them; rendering them is the display factory's call.
         self::assertSame(['two_factor'], $this->auditAttributes($organization, 'organization_member_access_suspended')['policies']);
+    }
+
+    public function testSuspensionRecordedAlongsideAPolicyChangeIsAttributedToAutomation(): void
+    {
+        $owner = $this->persistUser('orgowner', withTwoFactor: true);
+        $organization = $this->createOrg($owner);
+        $this->joinAsMember($organization, 'plainmember', withTwoFactor: false);
+
+        $this->policyManager()->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), '127.0.0.1');
+
+        // The owner enabled the policy; the suspension it produced was nobody's doing.
+        self::assertSame(
+            ['user', $owner->getId(), '127.0.0.1'],
+            $this->eventActor($organization, OrganizationEventType::TwoFactorEnforcementEdited),
+        );
+        self::assertSame(
+            ['automation', null, null],
+            $this->eventActor($organization, OrganizationEventType::MemberPolicyComplianceFailed),
+        );
     }
 
     public function testDisablingRestoresTheSuspendedMembersAndLogsIt(): void
@@ -504,6 +525,21 @@ class OrganizationPolicyTest extends IntegrationTestCase
         self::assertCount(1, $records);
 
         return $records[0]->attributes;
+    }
+
+    /**
+     * Label, user id and IP stamped on the org's single event of that type.
+     *
+     * @return array{string, int|null, string|null}
+     */
+    private function eventActor(OrganizationReadModel $organization, OrganizationEventType $type): array
+    {
+        $events = static::getService(OrganizationEventRepository::class)->findBy(
+            ['aggregateId' => $organization->id, 'type' => $type],
+        );
+        self::assertCount(1, $events);
+
+        return [$events[0]->actorLabel, $events[0]->actorUserId, $events[0]->ip];
     }
 
     private function eventCount(OrganizationReadModel $organization): int
