@@ -12,7 +12,6 @@
 
 namespace App\Controller\Admin;
 
-use App\Audit\Display\AuditLogDisplayFactory;
 use App\Controller\Controller;
 use App\Entity\AuditRecord;
 use App\Entity\AuditRecordRepository;
@@ -24,6 +23,7 @@ use App\FilterList\FilterLists;
 use App\FilterList\FilterSources;
 use App\Form\Model\FilterListEntryRequest;
 use App\Form\Type\FilterListEntryType;
+use App\Log\Display\AuditLogDisplayFactory;
 use Pagerfanta\Doctrine\ORM\QueryAdapter;
 use Pagerfanta\Pagerfanta;
 use Symfony\Component\HttpFoundation\RedirectResponse;
