@@ -12,8 +12,8 @@
 
 namespace App\Entity;
 
-use App\Audit\AuditRecordType;
 use App\Audit\VersionDeletionReason;
+use App\Log\AuditLogEventType;
 use App\Service\AuditRecordsManager;
 use App\Util\IpAddress;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
@@ -29,6 +29,7 @@ class AuditRecordRepository extends ServiceEntityRepository
     public function __construct(
         ManagerRegistry $registry,
         private readonly AuditRecordsManager $auditRecordsManager,
+        private readonly PackageTransparencyLogQueueRepository $transparencyLogQueue,
     ) {
         parent::__construct($registry, AuditRecord::class);
     }
@@ -42,11 +43,11 @@ class AuditRecordRepository extends ServiceEntityRepository
             ->where('a.type IN (:types)')
             ->andWhere("JSON_EXTRACT(a.attributes, '$.entry.public_id') = :publicId")
             ->setParameter('types', [
-                AuditRecordType::FilterListEntryAdded->value,
-                AuditRecordType::FilterListEntryDeleted->value,
-                AuditRecordType::FilterListEntryDisabled->value,
-                AuditRecordType::FilterListEntryEnabled->value,
-                AuditRecordType::FilterListEntryEdited->value,
+                AuditLogEventType::FilterListEntryAdded->value,
+                AuditLogEventType::FilterListEntryDeleted->value,
+                AuditLogEventType::FilterListEntryDisabled->value,
+                AuditLogEventType::FilterListEntryEnabled->value,
+                AuditLogEventType::FilterListEntryEdited->value,
             ])
             ->setParameter('publicId', $publicId)
             ->orderBy('a.datetime', 'DESC')
@@ -69,14 +70,14 @@ class AuditRecordRepository extends ServiceEntityRepository
             ->orWhere("(a.type = :softDeleted AND JSON_EXTRACT(a.attributes, '$.reason') IN (:adminVersionReasons))")
             ->orWhere("(a.type = :recovered AND JSON_EXTRACT(a.attributes, '$.previousReason') IN (:adminVersionReasons))")
             ->setParameter('alwaysTypes', [
-                AuditRecordType::UserFrozen->value,
-                AuditRecordType::UserUnfrozen->value,
-                AuditRecordType::UserDeleted->value,
-                AuditRecordType::PackageFrozen->value,
-                AuditRecordType::PackageUnfrozen->value,
+                AuditLogEventType::UserFrozen->value,
+                AuditLogEventType::UserUnfrozen->value,
+                AuditLogEventType::UserDeleted->value,
+                AuditLogEventType::PackageFrozen->value,
+                AuditLogEventType::PackageUnfrozen->value,
             ])
-            ->setParameter('softDeleted', AuditRecordType::VersionSoftDeleted->value)
-            ->setParameter('recovered', AuditRecordType::VersionRecovered->value)
+            ->setParameter('softDeleted', AuditLogEventType::VersionSoftDeleted->value)
+            ->setParameter('recovered', AuditLogEventType::VersionRecovered->value)
             ->setParameter('adminVersionReasons', [
                 VersionDeletionReason::DeletedByAdmin->value,
                 VersionDeletionReason::Hidden->value,
@@ -89,11 +90,35 @@ class AuditRecordRepository extends ServiceEntityRepository
 
     /**
      * Performs a direct insert not requiring usage of the ORM so it can be used within ORM lifecycle listeners
+     *
+     * The transparency-log queue row is this record's outbox entry: it has to commit together with
+     * the audit_log row, or the record exists and can never be projected. Callers inside an ORM
+     * flush are already in a transaction (DBAL turns this one into a savepoint), but some, like
+     * {@see \App\Security\TwoFactorAuthManager}, call this in autocommit, so own the transaction here.
      */
     public function insert(AuditRecord $record): void
     {
         $this->auditRecordsManager->enrichWithClientIP($record);
 
+        $connection = $this->getEntityManager()->getConnection();
+        $connection->beginTransaction();
+
+        try {
+            $this->insertRecord($record);
+            $this->indexSearchTerms($record);
+            $this->transparencyLogQueue->enqueue($record);
+            $connection->commit();
+        } catch (\Throwable $e) {
+            if ($connection->isTransactionActive()) {
+                $connection->rollBack();
+            }
+
+            throw $e;
+        }
+    }
+
+    private function insertRecord(AuditRecord $record): void
+    {
         $this->getEntityManager()->getConnection()->insert('audit_log', [
             'id' => $record->id,
             'datetime' => $record->datetime,
@@ -111,8 +136,6 @@ class AuditRecordRepository extends ServiceEntityRepository
             'attributes' => Types::JSON,
             'organizationId' => UlidType::NAME,
         ]);
-
-        $this->indexSearchTerms($record);
     }
 
     /**
