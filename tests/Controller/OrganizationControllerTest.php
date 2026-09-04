@@ -16,15 +16,24 @@ use App\Audit\AuditRecordType;
 use App\Entity\AuditRecord;
 use App\Entity\Organization;
 use App\Entity\OrganizationMember;
+use App\Entity\OrganizationMemberRepository;
+use App\Entity\OrganizationPolicyRepository;
 use App\Entity\OrganizationRepository;
 use App\Entity\OrganizationTeam;
 use App\Entity\OrganizationTeamMember;
 use App\Entity\OrganizationTeamMemberRepository;
 use App\Entity\OrganizationTeamRepository;
 use App\Entity\User;
+use App\Organization\Domain\AllowedEmailDomains;
+use App\Organization\Domain\Organization as OrganizationAggregate;
 use App\Organization\Domain\OrganizationTeamKind;
+use App\Organization\Domain\PolicyComplianceReason;
+use App\Organization\Domain\UnmetPolicies;
+use App\Organization\EventStore\Actor;
+use App\Organization\EventStore\EventStore;
 use App\Organization\OrganizationManager;
 use App\Organization\OrganizationMembershipManager;
+use App\Organization\OrganizationPolicyManager;
 use App\Tests\IntegrationTestCase;
 use Symfony\Component\Uid\Ulid;
 
@@ -33,6 +42,8 @@ class OrganizationControllerTest extends IntegrationTestCase
     public function testShowRendersActiveOrganization(): void
     {
         $user = self::createUser();
+        // Owners are suspended without 2FA whatever the org's policies say, which is not what this covers.
+        $user->setTotpSecret('totp-secret');
         $this->store($user);
         $this->persistOrganization('acme', 'ACME Corp', owner: $user);
 
@@ -182,6 +193,313 @@ class OrganizationControllerTest extends IntegrationTestCase
         $organization = $this->organizations()->findOneBySlug('acme');
         self::assertNotNull($organization);
         self::assertSame('ACME Inc', $organization->displayName);
+    }
+
+    public function testOwnerEnablesTwoFactorPolicyFromPoliciesPage(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $this->store($owner);
+
+        static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);
+        $organization = $this->organizations()->findOneBySlug('acme');
+        self::assertNotNull($organization);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/policies');
+
+        self::assertResponseIsSuccessful();
+        $form = $crawler->selectButton('Save policies')->form([
+            'organization_policy[enforceTwoFactor]' => '1',
+        ]);
+        $this->client->submit($form);
+
+        self::assertResponseRedirects('/organizations/acme/policies');
+        self::assertTrue(static::getService(OrganizationPolicyRepository::class)->policiesFor($organization->id)->enforceTwoFactor);
+    }
+
+    public function testOwnerSetsEmailDomainsFromPoliciesPage(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $this->store($owner);
+
+        static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);
+        $organization = $this->organizations()->findOneBySlug('acme');
+        self::assertNotNull($organization);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/policies');
+
+        self::assertResponseIsSuccessful();
+        $form = $crawler->selectButton('Save policies')->form([
+            // The owner's own address is on example.org, so this does not lock them out.
+            'organization_policy[allowedEmailDomains]' => 'example.org, ACME.io',
+        ]);
+        $this->client->submit($form);
+
+        self::assertResponseRedirects('/organizations/acme/policies');
+        $policies = static::getService(OrganizationPolicyRepository::class)->policiesFor($organization->id);
+        self::assertSame(['acme.io', 'example.org'], $policies->allowedEmailDomains->domains);
+
+        // The saved list comes back into the form, normalised.
+        $crawler = $this->client->request('GET', '/organizations/acme/policies');
+        self::assertSame('acme.io, example.org', $crawler->filter('#organization_policy_allowedEmailDomains')->attr('value'));
+    }
+
+    public function testSettingADomainTheOwnerIsNotOnIsRefusedWithAFormError(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $this->store($owner);
+
+        static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);
+        $organization = $this->organizations()->findOneBySlug('acme');
+        self::assertNotNull($organization);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/policies');
+        $form = $crawler->selectButton('Save policies')->form([
+            'organization_policy[allowedEmailDomains]' => 'acme.io',
+        ]);
+        $crawler = $this->client->submit($form);
+
+        // Saving would suspend the owner from their own organization, so nothing is recorded.
+        self::assertResponseIsSuccessful();
+        self::assertStringContainsString('must be on one of the domains you require', $crawler->filter('.organization_policies')->text());
+        self::assertTrue(
+            static::getService(OrganizationPolicyRepository::class)->policiesFor($organization->id)->allowedEmailDomains->isEmpty(),
+        );
+    }
+
+    public function testARejectedPolicyDoesNotSaveTheRestOfTheSameSubmit(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        // No TOTP secret, so this member would be suspended the moment 2FA enforcement landed.
+        $member = self::createUser('member', 'member@example.org');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/policies');
+        $form = $crawler->selectButton('Save policies')->form([
+            'organization_policy[enforceTwoFactor]' => '1',
+            // Not a domain name, so the whole submission is refused.
+            'organization_policy[allowedEmailDomains]' => 'acme..io',
+        ]);
+        $crawler = $this->client->submit($form);
+
+        self::assertResponseIsSuccessful();
+        self::assertStringContainsString('is not a valid email address domain', $crawler->filter('.organization_policies')->text());
+
+        // Neither half landed, so the form the owner is looking at still describes the org.
+        $policies = static::getService(OrganizationPolicyRepository::class)->policiesFor($organization->id);
+        self::assertFalse($policies->enforceTwoFactor);
+        self::assertTrue($policies->allowedEmailDomains->isEmpty());
+        self::assertSame(0, static::getService(OrganizationMemberRepository::class)->countSuspended($organization->id));
+    }
+
+    public function testMembersListNamesEveryPolicyASuspendedMemberFails(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        // No TOTP secret and an address on another domain: this member fails both policies at once.
+        $member = self::createUser('member', 'member@other.org');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, true, new AllowedEmailDomains('example.org'), null);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/members');
+
+        self::assertResponseIsSuccessful();
+        self::assertSame(
+            'Does not meet: two-factor authentication, email address domain',
+            $crawler->filter('.label-danger:contains("suspended")')->attr('title'),
+        );
+    }
+
+    public function testPoliciesForbiddenForNonOwner(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $member = self::createUser('member', 'member@example.org');
+        $member->setTotpSecret('totp-secret');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        self::assertNotNull($organization);
+
+        $this->client->loginUser($member);
+        $this->client->request('GET', '/organizations/acme/policies');
+
+        self::assertResponseStatusCodeSame(403);
+    }
+
+    public function testSettingsNoLongerCarriesThePolicyForm(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $this->store($owner);
+        $this->persistOrganization('acme', 'ACME Corp', owner: $owner);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/settings');
+
+        self::assertResponseIsSuccessful();
+        self::assertCount(0, $crawler->selectButton('Save policies'));
+        // Policies live behind their own nav entry now.
+        self::assertCount(1, $crawler->filter('a[href="/organizations/acme/policies"]'));
+    }
+
+    public function testOwnerWhoDropsTwoFactorIsSentToEnableItAgain(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $this->store($owner);
+
+        static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);
+
+        // No policy is set on this org: an owner still owes 2FA, so dropping it suspends them.
+        $reloaded = static::getEM()->getRepository(User::class)->find($owner->getId());
+        self::assertNotNull($reloaded);
+        $reloaded->setTotpSecret(null);
+        static::getEM()->flush();
+
+        $this->client->loginUser($reloaded);
+        $this->client->request('GET', '/organizations/acme/policies');
+
+        // A missing second factor names its own remedy, so they go to 2FA setup rather than to the
+        // generic suspended banner.
+        self::assertResponseRedirects('/users/owner/2fa/');
+    }
+
+    public function testSuspendedMemberIsAnsweredWithTheNoticeInPlaceOfThePageTheyAskedFor(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        // On another domain, so they fail the policy at once. They keep their second factor: a missing one
+        // names its own remedy and redirects to 2FA setup instead.
+        $member = self::createUser('member', 'member@other.org');
+        $member->setTotpSecret('totp-secret');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
+
+        $this->client->loginUser($member);
+
+        // Refused like every other org page, and the denial itself carries the explanation.
+        $crawler = $this->client->request('GET', '/organizations/acme');
+        self::assertResponseStatusCodeSame(403);
+        self::assertStringContainsString('Your access to this organization is suspended', $crawler->filter('.alert')->text());
+        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.col-md-9 ul')->text());
+
+        // Leaving survives, so they are never trapped, and the notice offers it directly.
+        self::assertCount(1, $crawler->filter('a[href="/organizations/acme/members/leave"]'));
+        $this->client->request('GET', '/organizations/acme/members/leave');
+        self::assertResponseIsSuccessful();
+    }
+
+    public function testASuspendedOwnerGetsTheNoticeRatherThanA404FromAnArgumentResolver(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $this->store($owner);
+
+        [$organization, $backend] = $this->createOrganizationWithCustomTeam($owner, 'acme', 'ACME Corp', 'backend');
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
+
+        // The policy cannot be saved on an address outside it, so an owner only falls out afterwards.
+        $owner->setEmail('owner@other.org');
+        $owner->setEmailCanonical('owner@other.org');
+        static::getEM()->flush();
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', sprintf('/organizations/acme/teams/%s/rename', $backend->teamId));
+
+        // The resolver runs ahead of the action's guard and checks standing only, so they are told what
+        // they owe instead of getting a 404 for a team that plainly exists.
+        self::assertResponseStatusCodeSame(403);
+        self::assertStringContainsString('Your access to this organization is suspended', $crawler->filter('.alert')->text());
+        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.col-md-9 ul')->text());
+    }
+
+    public function testTheNoticeClearsItselfOnceTheMemberComplies(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        // No TOTP secret: this member fails the policy as soon as it is enabled.
+        $member = self::createUser('member', 'member@example.org');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        static::getService(OrganizationPolicyManager::class)->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
+
+        $members = static::getService(OrganizationMemberRepository::class);
+        self::assertSame(1, $members->countSuspended($organization->id));
+
+        // The remedy the notice offers. Nothing re-verified them since, so their row still says suspended.
+        $member->setTotpSecret('totp-secret');
+        static::getEM()->flush();
+
+        $this->client->loginUser($member);
+        $crawler = $this->client->request('GET', '/organizations/acme');
+
+        // Answered, so the page renders instead of a notice they have already met.
+        self::assertResponseIsSuccessful();
+        self::assertStringNotContainsString('Your access to this organization is suspended', $crawler->text());
+
+        // Recorded, not just displayed: the row only clears when the restoration is projected, so the
+        // members list stops labelling them too.
+        self::assertSame(0, $members->countSuspended($organization->id));
+    }
+
+    public function testAMemberFailingSeveralPoliciesGetsTheNoticeListingAllOfThem(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        // No TOTP secret and an address on another domain: no single remedy answers this.
+        $member = self::createUser('member', 'member@other.org');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, true, new AllowedEmailDomains('example.org'), null);
+
+        $this->client->loginUser($member);
+        $crawler = $this->client->request('GET', '/organizations/acme/members');
+
+        // So the notice is rendered in place of the members page.
+        self::assertResponseStatusCodeSame(403);
+        self::assertStringContainsString('Enable two-factor authentication', $crawler->filter('.col-md-9 ul')->text());
+        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.col-md-9 ul')->text());
+    }
+
+    public function testMembersListLabelsSuspendedMembersForOwners(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $member = self::createUser('member', 'member@example.org');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        static::getService(OrganizationPolicyManager::class)->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/members');
+
+        self::assertResponseIsSuccessful();
+        $label = $crawler->filter('.label-danger:contains("suspended")');
+        self::assertCount(1, $label);
+
+        // Third-person form: this row is about someone else, so the member-facing remediation reads wrong.
+        self::assertSame('Does not meet: two-factor authentication', $label->attr('title'));
     }
 
     public function testTeamsForbiddenForNonOwner(): void
@@ -848,6 +1166,31 @@ class OrganizationControllerTest extends IntegrationTestCase
         self::assertCount(2, $types, 'Only the two records for this organization should be listed');
     }
 
+    public function testAuditLogNamesThePolicyASuspendedMemberFailed(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $member = self::createUser('member', 'member@example.org');
+        $this->store($owner, $member);
+        $organization = $this->persistOrganization('acme', 'ACME Corp', owner: $owner);
+
+        $this->store(AuditRecord::organizationMemberAccessSuspended(
+            $organization->id,
+            $organization->slug,
+            $organization->displayName,
+            $member,
+            new UnmetPolicies(PolicyComplianceReason::TwoFactor),
+        ));
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/audit-log');
+        self::assertResponseIsSuccessful();
+
+        // Owners see what the member has to fix; the transparency log does not, see
+        // TransparencyLogControllerTest::testSuspensionDoesNotNameThePolicyOnTheTransparencyLog().
+        self::assertStringContainsString('two-factor authentication', $crawler->filter('td.audit-log-details')->text());
+    }
+
     public function testAuditLogTypeFilterNarrowsResults(): void
     {
         $owner = self::createUser('owner', 'owner@example.org');
@@ -895,6 +1238,25 @@ class OrganizationControllerTest extends IntegrationTestCase
         self::assertNotNull($organization);
 
         $manager->edit($organization, $owner, $to, 'ACME Corp', null);
+    }
+
+    /**
+     * Bootstraps an organization through the event store with a second, plain member, joined the way the
+     * invitation flow would.
+     */
+    private function organizationWithMember(User $owner, User $member): Organization
+    {
+        static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);
+
+        $organization = $this->organizations()->findOneBySlug('acme');
+        self::assertNotNull($organization);
+
+        $eventStore = static::getService(EventStore::class);
+        $aggregate = OrganizationAggregate::reconstitute($organization->id, $eventStore->loadHistory($organization->id));
+        $aggregate->joinViaInvitation($member->getId(), [$organization->allMembersTeamId], new Ulid());
+        $eventStore->append($aggregate, Actor::member($member), null);
+
+        return $organization;
     }
 
     /**

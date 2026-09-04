@@ -25,7 +25,12 @@
         <tbody>
             {% for member in members %}
                 <tr>
-                    <td>{{ member.user ? member.user.username : '(unknown user #' ~ member.userId ~ ')' }}</td>
+                    <td>
+                        {{ member.user ? member.user.username : '(unknown user #' ~ member.userId ~ ')' }}
+                        {% if member.suspendedPolicies.reasons %}
+                            <span class="label label-danger" data-toggle="tooltip" data-placement="top" data-container="body" title="Does not meet: {{ member.suspendedPolicies.reasons|map(reason => reason.label)|join(', ') }}">suspended</span>
+                        {% endif %}
+                    </td>
                     <td class="team-labels">
                         {% for team in member.teams %}
                             <span class="badge bg-secondary">{{ team.name }}</span>

@@ -20,10 +20,12 @@ use App\Entity\OrganizationTeam;
 use App\Entity\OrganizationTeamMemberRepository;
 use App\Entity\OrganizationTeamRepository;
 use App\Entity\User;
+use App\Organization\Domain\AllowedEmailDomains;
 use App\Organization\Domain\InvitationStatus;
 use App\Organization\InvitationTokenGenerator;
 use App\Organization\OrganizationManager;
 use App\Organization\OrganizationMembershipManager;
+use App\Organization\OrganizationPolicyManager;
 use App\Tests\IntegrationTestCase;
 use Symfony\Component\Uid\Ulid;
 
@@ -228,6 +230,73 @@ class OrganizationInvitationControllerTest extends IntegrationTestCase
 
         $this->client->submit($crawler->selectButton('Accept invitation')->form());
         self::assertResponseRedirects('/');
+
+        self::assertTrue(
+            static::getService(OrganizationTeamMemberRepository::class)->isMemberOfOrg($organization->id, $alice->getId()),
+        );
+    }
+
+    public function testInvitationToOwnersNamesTheOwnershipRequirement(): void
+    {
+        [$owner, $organization] = $this->orgWithTeam();
+        // No TOTP secret: owners owe 2FA whether or not the org set the policy, and the same checklist says so.
+        $alice = self::createUser('alice', 'alice@example.org');
+        $this->store($alice);
+
+        $ownersTeam = static::getService(OrganizationTeamRepository::class)->find($organization->ownersTeamId);
+        self::assertNotNull($ownersTeam);
+
+        $this->client->loginUser($owner);
+        $this->submitInvite($ownersTeam, 'alice@example.org');
+        $path = $this->acceptUrlPath();
+
+        $this->client->loginUser($alice);
+        $crawler = $this->client->request('GET', $path);
+
+        self::assertResponseIsSuccessful();
+        $alert = $crawler->filter('.alert-warning')->text();
+        self::assertStringContainsString('makes you an owner', $alert);
+        self::assertStringContainsString('Enable two-factor authentication', $alert);
+    }
+
+    public function testInviteeCannotAcceptWhileAnOrgPolicyIsUnmet(): void
+    {
+        [$owner, $organization, $backend] = $this->orgWithTeam();
+        // No TOTP secret, so alice cannot satisfy the org's 2FA policy yet.
+        $alice = self::createUser('alice', 'alice@example.org');
+        $this->store($alice);
+
+        $this->client->loginUser($owner);
+        $this->submitInvite($backend, 'alice@example.org');
+        $path = $this->acceptUrlPath();
+        static::getService(OrganizationPolicyManager::class)->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
+
+        $this->client->loginUser($alice);
+        $crawler = $this->client->request('GET', $path);
+
+        self::assertResponseIsSuccessful();
+        self::assertStringContainsString('requires the following before you can join', $crawler->filter('.alert-warning')->text());
+
+        // The button is still there, but accepting is refused and the invitation stays pending, so the
+        // same link works once she has enabled 2FA.
+        $this->client->submit($crawler->selectButton('Accept invitation')->form());
+
+        self::assertFalse(
+            static::getService(OrganizationTeamMemberRepository::class)->isMemberOfOrg($organization->id, $alice->getId()),
+        );
+        self::assertSame(InvitationStatus::Pending, $this->pendingInvitation($organization)->status);
+
+        // Once compliant, the same link accepts. The kernel reboots between requests, so alice has to be
+        // reloaded into the current entity manager before she can be changed.
+        $reloaded = static::getEM()->getRepository(User::class)->find($alice->getId());
+        self::assertNotNull($reloaded);
+        $reloaded->setTotpSecret('totp-secret');
+        static::getEM()->flush();
+
+        // Changing the 2FA secret busts the session, so alice signs in again before returning to the link.
+        $this->client->loginUser($reloaded);
+        $crawler = $this->client->request('GET', $path);
+        $this->client->submit($crawler->selectButton('Accept invitation')->form());
 
         self::assertTrue(
             static::getService(OrganizationTeamMemberRepository::class)->isMemberOfOrg($organization->id, $alice->getId()),

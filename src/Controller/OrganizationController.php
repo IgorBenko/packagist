@@ -19,6 +19,7 @@ use App\Entity\Organization;
 use App\Entity\OrganizationInvitation;
 use App\Entity\OrganizationInvitationRepository;
 use App\Entity\OrganizationMemberRepository;
+use App\Entity\OrganizationPolicyRepository;
 use App\Entity\OrganizationRepository;
 use App\Entity\OrganizationTeam;
 use App\Entity\OrganizationTeamMember;
@@ -29,23 +30,28 @@ use App\Entity\UserRepository;
 use App\Form\Model\AddTeamMemberRequest;
 use App\Form\Model\InviteMemberRequest;
 use App\Form\Model\OrganizationDetailsRequest;
+use App\Form\Model\OrganizationPolicyRequest;
 use App\Form\Model\TeamRequest;
 use App\Form\Type\AddTeamMemberType;
 use App\Form\Type\DeleteTeamType;
 use App\Form\Type\InviteMemberType;
 use App\Form\Type\LeaveOrganizationType;
 use App\Form\Type\OrganizationDetailsType;
+use App\Form\Type\OrganizationPolicyType;
 use App\Form\Type\RemoveMemberType;
 use App\Form\Type\RemoveTeamMemberType;
 use App\Form\Type\ResendInvitationType;
 use App\Form\Type\RevokeInvitationType;
 use App\Form\Type\TeamType;
+use App\Organization\Domain\AllowedEmailDomains;
 use App\Organization\Domain\Exception\OrganizationException;
 use App\Organization\Domain\Organization as OrganizationDomain;
 use App\Organization\Domain\Slug;
+use App\Organization\Domain\UnmetPolicies;
 use App\Organization\InvitationManager;
 use App\Organization\OrganizationManager;
 use App\Organization\OrganizationMembershipManager;
+use App\Organization\OrganizationPolicyManager;
 use App\QueryFilter\AuditLog\ActorFilter;
 use App\QueryFilter\AuditLog\AuditRecordTypeFilter;
 use App\QueryFilter\AuditLog\DateTimeFromFilter;
@@ -71,8 +77,10 @@ class OrganizationController extends Controller
     public function __construct(
         private readonly OrganizationManager $organizationManager,
         private readonly OrganizationMembershipManager $membershipManager,
+        private readonly OrganizationPolicyManager $policyManager,
         private readonly InvitationManager $invitationManager,
         private readonly OrganizationRepository $organizationRepo,
+        private readonly OrganizationPolicyRepository $organizationPolicyRepo,
         private readonly OrganizationTeamRepository $organizationTeamRepo,
         private readonly OrganizationTeamMemberRepository $organizationTeamMemberRepo,
         private readonly OrganizationInvitationRepository $organizationInvitationRepo,
@@ -136,6 +144,51 @@ class OrganizationController extends Controller
         ]);
     }
 
+    /**
+     * Its own page rather than a section of the settings form: saving here can suspend members immediately.
+     */
+    #[IsGranted(OrganizationActions::ViewPolicies->value, 'organization')]
+    #[Route(path: '/organizations/{organization}/policies', name: 'organization_policies', methods: ['GET', 'POST'], requirements: ['organization' => Slug::PATTERN])]
+    public function policies(Request $request, Organization $organization, #[CurrentUser] User $user): Response
+    {
+        $policies = $this->organizationPolicyRepo->policiesFor($organization->id);
+
+        $policyRequest = new OrganizationPolicyRequest();
+        $policyRequest->enforceTwoFactor = $policies->enforceTwoFactor;
+        $policyRequest->allowedEmailDomains = $policies->allowedEmailDomains->toInput();
+
+        $form = $this->createForm(OrganizationPolicyType::class, $policyRequest);
+        $form->handleRequest($request);
+
+        if ($form->isSubmitted() && $form->isValid()) {
+            $this->denyAccessUnlessGranted(OrganizationActions::EditPolicies->value, $organization);
+
+            try {
+                // One command for the whole page: a rejected submission, whichever policy it fails on,
+                // leaves the org as it was instead of saving the half that passed.
+                $this->policyManager->setPolicies(
+                    $organization,
+                    $user,
+                    $policyRequest->enforceTwoFactor,
+                    AllowedEmailDomains::fromList($policyRequest->allowedEmailDomains),
+                    $request->getClientIp(),
+                );
+
+                $this->addFlash('success', 'Organization policies updated.');
+
+                return $this->redirectToRoute('organization_policies', ['organization' => $organization->slug]);
+            } catch (OrganizationException $e) {
+                $form->addError(new FormError($e->getMessage()));
+            }
+        }
+
+        return $this->render('organization/policies.html.twig', [
+            'organization' => $organization,
+            'form' => $form->createView(),
+            'suspendedMemberCount' => $this->organizationMemberRepo->countSuspended($organization->id),
+        ]);
+    }
+
     #[IsGranted(OrganizationActions::ViewAuditLog->value, 'organization')]
     #[Route(path: '/organizations/{organization}/audit-log', name: 'organization_audit_log', methods: ['GET'], requirements: ['organization' => Slug::PATTERN])]
     public function auditLog(Request $request, Organization $organization, AuditRecordRepository $auditRecordRepository, AuditLogDisplayFactory $displayFactory): Response
@@ -174,7 +227,7 @@ class OrganizationController extends Controller
 
         return $this->render('organization/audit_log.html.twig', [
             'organization' => $organization,
-            'auditLogDisplays' => $displayFactory->build($auditLogs, revealEmails: true),
+            'auditLogDisplays' => $displayFactory->build($auditLogs, revealMemberDetails: true),
             'auditLogPaginator' => $auditLogs,
             'types' => AuditRecordType::organizationCases(),
             'selectedFilters' => $selectedFilters,
@@ -413,12 +466,15 @@ class OrganizationController extends Controller
             }
         }
 
+        $memberRows = $this->organizationMemberRepo->findByOrgIndexedByUser($organization->id);
+
         $members = [];
         foreach ($teamsByUser as $userId => $teams) {
             $members[] = [
                 'user' => $usersById[$userId] ?? null,
                 'userId' => $userId,
                 'teams' => $teams,
+                'suspendedPolicies' => $memberRows[$userId]->suspendedPolicies ?? UnmetPolicies::none(),
             ];
         }
 

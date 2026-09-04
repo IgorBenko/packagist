@@ -27,9 +27,31 @@ class OrganizationMemberRepository extends ServiceEntityRepository
         parent::__construct($registry, OrganizationMember::class);
     }
 
+    /**
+     * find(), not findOneBy(): the pair is the identifier, so repeat lookups in a request come from the
+     * identity map. The voter asks for this row once per attribute a page checks, and so does the enforcer.
+     */
     public function findOneByOrgAndUser(Ulid $orgId, int $userId): ?OrganizationMember
     {
-        return $this->findOneBy(['orgId' => $orgId, 'userId' => $userId]);
+        return $this->find(['orgId' => $orgId, 'userId' => $userId]);
+    }
+
+    /**
+     * @return array<int, OrganizationMember> keyed by user id
+     */
+    public function findByOrgIndexedByUser(Ulid $orgId): array
+    {
+        $members = [];
+        foreach ($this->findBy(['orgId' => $orgId]) as $member) {
+            $members[$member->userId] = $member;
+        }
+
+        return $members;
+    }
+
+    public function countSuspended(Ulid $orgId): int
+    {
+        return $this->count(['orgId' => $orgId, 'suspended' => true]);
     }
 
     /**
