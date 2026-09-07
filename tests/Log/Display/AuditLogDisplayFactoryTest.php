@@ -25,7 +25,7 @@ use App\Log\Display\Event\GitHubLinkedWithUserDisplay;
 use App\Log\Display\Event\OrganizationInvitationDisplay;
 use App\Log\Display\Event\PackageAbandonedDisplay;
 use App\Log\Display\Event\PackageDeletedDisplay;
-use App\Log\Display\Event\PackageRepositoryDisplay;
+use App\Log\Display\Event\PackageWithRepositoryDisplay;
 use App\Log\Display\Event\PackageFrozenDisplay;
 use App\Log\Display\Event\SecurityAdvisoryCreatedDisplay;
 use App\Log\Display\Event\SecurityAdvisoryEditedDisplay;
@@ -68,13 +68,13 @@ class AuditLogDisplayFactoryTest extends TestCase
 
         $display = $this->factory->buildSingle($auditRecord);
 
-        self::assertInstanceOf(PackageRepositoryDisplay::class, $display);
+        self::assertInstanceOf(PackageWithRepositoryDisplay::class, $display);
         self::assertSame('vendor/package', $display->packageName);
         self::assertSame('https://github.com/vendor/package', $display->repository);
         self::assertSame(123, $display->actor->id);
         self::assertSame('testuser', $display->actor->username);
         self::assertSame(AuditLogEventType::PackageCreated, $display->getType());
-        self::assertSame('log/display/package_repository.html.twig', $display->getTemplateName());
+        self::assertSame('log/display/package_with_repository.html.twig', $display->getTemplateName());
         self::assertSame('log.type.package_created', $display->getTypeTranslationKey());
     }
 
@@ -91,7 +91,7 @@ class AuditLogDisplayFactoryTest extends TestCase
 
         $display = $this->factory->buildSingle($auditRecord);
 
-        self::assertInstanceOf(PackageRepositoryDisplay::class, $display);
+        self::assertInstanceOf(PackageWithRepositoryDisplay::class, $display);
         self::assertNull($display->actor->id);
         self::assertSame('automation', $display->actor->username);
     }
@@ -228,13 +228,13 @@ class AuditLogDisplayFactoryTest extends TestCase
 
         $display = $this->factory->buildSingle($auditRecord);
 
-        self::assertInstanceOf(PackageRepositoryDisplay::class, $display);
+        self::assertInstanceOf(PackageWithRepositoryDisplay::class, $display);
         self::assertSame('vendor/restored-package', $display->packageName);
         self::assertSame('https://github.com/vendor/restored-package', $display->repository);
         self::assertSame(234, $display->actor->id);
         self::assertSame('maintainer', $display->actor->username);
         self::assertSame(AuditLogEventType::PackageUnabandoned, $display->getType());
-        self::assertSame('log/display/package_repository.html.twig', $display->getTemplateName());
+        self::assertSame('log/display/package_with_repository.html.twig', $display->getTemplateName());
     }
 
     public function testBuildPackageUnabandonedWithoutPreviousReplacement(): void
@@ -251,7 +251,7 @@ class AuditLogDisplayFactoryTest extends TestCase
 
         $display = $this->factory->buildSingle($auditRecord);
 
-        self::assertInstanceOf(PackageRepositoryDisplay::class, $display);
+        self::assertInstanceOf(PackageWithRepositoryDisplay::class, $display);
         self::assertSame(777, $display->actor->id);
         self::assertSame('maintainer', $display->actor->username);
     }
@@ -293,13 +293,13 @@ class AuditLogDisplayFactoryTest extends TestCase
 
         $display = $this->factory->buildSingle($auditRecord);
 
-        self::assertInstanceOf(PackageRepositoryDisplay::class, $display);
+        self::assertInstanceOf(PackageWithRepositoryDisplay::class, $display);
         self::assertSame('vendor/restored-package', $display->packageName);
         self::assertSame('https://github.com/vendor/restored-package', $display->repository);
         self::assertSame(234, $display->actor->id);
         self::assertSame('maintainer', $display->actor->username);
         self::assertSame(AuditLogEventType::PackageUnfrozen, $display->getType());
-        self::assertSame('log/display/package_repository.html.twig', $display->getTemplateName());
+        self::assertSame('log/display/package_with_repository.html.twig', $display->getTemplateName());
     }
 
     #[TestWith([false, 999, '**@**.**'])]
@@ -373,7 +373,7 @@ class AuditLogDisplayFactoryTest extends TestCase
         $displays = $this->factory->build($records);
 
         self::assertCount(3, $displays);
-        self::assertInstanceOf(PackageRepositoryDisplay::class, $displays[0]);
+        self::assertInstanceOf(PackageWithRepositoryDisplay::class, $displays[0]);
         self::assertInstanceOf(PackageDeletedDisplay::class, $displays[1]);
         self::assertInstanceOf(VersionDeletedDisplay::class, $displays[2]);
         self::assertSame('vendor/package1', $displays[0]->packageName);
