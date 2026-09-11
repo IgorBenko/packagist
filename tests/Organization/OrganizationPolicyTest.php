@@ -381,7 +381,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         self::assertSame([PolicyComplianceReason::TwoFactor], $this->enforcer()->enforce($organization, $owner)->reasons);
     }
 
-    public function testAFlappingMemberCannotFillTheAuditLogFromPageViews(): void
+    public function testEveryComplianceFlipIsRecorded(): void
     {
         $owner = $this->persistUser('orgowner', withTwoFactor: true);
         $organization = $this->createOrg($owner);
@@ -391,8 +391,8 @@ class OrganizationPolicyTest extends IntegrationTestCase
 
         $enforcer = $this->enforcer();
 
-        // Toggling their own second factor and loading an org page each time: every flip is a transition the
-        // enforcer would otherwise record, from a GET, with nothing bounding it.
+        // Toggling their own second factor and loading an org page each time: nothing bounds how often a
+        // member can make a GET write to the stream, so each flip has to land.
         for ($flip = 0; $flip < 16; ++$flip) {
             $member->setTotpSecret($flip % 2 === 0 ? null : 'totp-secret');
             static::getEM()->flush();
@@ -405,10 +405,8 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $recorded = $this->auditCount($organization, 'organization_member_access_suspended')
             + $this->auditCount($organization, 'organization_member_access_restored');
 
-        self::assertGreaterThan(0, $recorded, 'The first transitions are still recorded.');
-        self::assertLessThanOrEqual(10, $recorded, 'Recording is capped per member per window.');
+        self::assertSame(16, $recorded);
 
-        // Access is decided from the current facts either way, not from the row the cap left behind.
         $member->setTotpSecret(null);
         static::getEM()->flush();
         $enforcer->reset();
