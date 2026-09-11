@@ -12,29 +12,32 @@
 
 namespace App\Log\Display\Event;
 
-use App\Log\AuditLogEventType;
 use App\Log\Display\AbstractLogDisplay;
 use App\Log\Display\ActorDisplay;
+use App\Log\TransparencyLogEventType;
 
-readonly class PackageUnabandonedDisplay extends AbstractLogDisplay
+/**
+ * Version events whose only detail is the version string: created / deleted.
+ */
+readonly class VersionDisplay extends AbstractLogDisplay
 {
     public function __construct(
+        private TransparencyLogEventType $type,
         \DateTimeImmutable $datetime,
         public string $packageName,
-        public string $repository,
+        public string $version,
         ActorDisplay $actor,
-        ?string $ip,
     ) {
-        parent::__construct($datetime, $actor, $ip);
+        parent::__construct($datetime, $actor);
     }
 
-    public function getType(): AuditLogEventType
+    public function getType(): TransparencyLogEventType
     {
-        return AuditLogEventType::PackageUnabandoned;
+        return $this->type;
     }
 
     public function getTemplateName(): string
     {
-        return 'log/display/package_unabandoned.html.twig';
+        return 'log/display/version.html.twig';
     }
 }

@@ -41,8 +41,20 @@ readonly class OrganizationInvitationDisplay extends AbstractLogDisplay
         return $this->type;
     }
 
+    /**
+     * Spelled out rather than derived from the type so the template-parity guard in
+     * LogDisplayTemplatesTest can see which partials this display owns.
+     */
     public function getTemplateName(): string
     {
-        return 'log/display/'.$this->type->value.'.html.twig';
+        return match ($this->type) {
+            AuditLogEventType::OrganizationInvitationSent => 'log/display/organization_invitation_sent.html.twig',
+            AuditLogEventType::OrganizationInvitationResent => 'log/display/organization_invitation_resent.html.twig',
+            AuditLogEventType::OrganizationInvitationRevoked => 'log/display/organization_invitation_revoked.html.twig',
+            AuditLogEventType::OrganizationInvitationAccepted => 'log/display/organization_invitation_accepted.html.twig',
+            AuditLogEventType::OrganizationInvitationDeclined => 'log/display/organization_invitation_declined.html.twig',
+            AuditLogEventType::OrganizationInvitationExpired => 'log/display/organization_invitation_expired.html.twig',
+            default => throw new \LogicException($this->type->value.' is not an invitation event'),
+        };
     }
 }

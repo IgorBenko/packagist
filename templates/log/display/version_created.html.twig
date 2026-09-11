@@ -1,10 +1,8 @@
-{% import 'log/macros.html.twig' as auditLog %}
+{% import 'log/macros.html.twig' as log %}
 
-<strong>{{ auditLog.packageLink(display.packageName) }}</strong> {{ display.version }}<br>
-{% if display.sourceReference %}
-    Source: {{ display.sourceReference }}<br>
-{% endif %}
-{% if display.distReference %}
-    Dist: {{ display.distReference }}<br>
-{% endif %}
+<strong>{{ log.packageLink(display.packageName) }}</strong> {{ display.version }}<br>
+{## the references are the published part of the version metadata blob, older transparency log entries carry none ##}
+{% if display.sourceReference %}Source: <code>{{ display.sourceReference }}</code><br>{% endif %}
+{% if display.distReference %}Dist: <code>{{ display.distReference }}</code><br>{% endif %}
+{% if display.distShasum %}Dist checksum: <code>{{ display.distShasum }}</code><br>{% endif %}
 Created by: {{ display.actor.username }}
