@@ -1,0 +1,13 @@
+{#
+    One policy the current user does not satisfy, rendered once per policy by both the suspension notice and
+    the invitation checklist. The copy comes from OrganizationPolicies::remediationsFor(); only the link
+    belongs here, so route names stay out of the domain.
+#}
+<li>
+    {{ remediation.text }}
+    {% if remediation.reason.value == 'two_factor' and app.user %}
+        <a href="{{ path('user_2fa_configure', { name: app.user.username }) }}">Set up two-factor authentication</a>
+    {% elseif remediation.reason.value == 'email_domain' and app.user %}
+        <a href="{{ path('edit_profile') }}">Change your account email address</a>
+    {% endif %}
+</li>

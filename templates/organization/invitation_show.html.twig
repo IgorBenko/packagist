@@ -21,11 +21,22 @@
             <a class="btn btn-secondary" href="{{ path('organization_show', { organization: organization.slug }) }}">Go to {{ organization.displayName }}</a>
         </div>
     {% else %}
-        {% if needsTwoFactor %}
+        {% if remediations %}
             <div class="alert alert-warning">
-                This invitation makes you an owner, which requires two-factor authentication.
-                Please <a href="{{ path('user_2fa_configure', { name: app.user.username }) }}">enable two-factor authentication</a>,
-                then return to this page to accept.
+                {# One list for every requirement; the heading only says whether ownership is what triggers them. #}
+                <strong>
+                    {% if targetsOwners %}
+                        This invitation makes you an owner of {{ organization.displayName }}, which requires the following:
+                    {% else %}
+                        {{ organization.displayName }} requires the following before you can join:
+                    {% endif %}
+                </strong>
+                <ul>
+                    {% for remediation in remediations %}
+                        {{ include('organization/_policy_remediation.html.twig', { remediation: remediation }) }}
+                    {% endfor %}
+                </ul>
+                This invitation stays valid in the meantime: come back to this page and accept once you are done.
             </div>
         {% endif %}
 

@@ -23,7 +23,7 @@ enum OrganizationActions: string
     case SoftDelete = 'soft-delete';
     case Restore = 'restore';
 
-    // Team & member management — owner-only.
+    // Team & member management, owner-only.
     case ViewTeams = 'view-teams';
     case CreateTeam = 'create-team';
     case RenameTeam = 'rename-team';
@@ -34,6 +34,11 @@ enum OrganizationActions: string
     case ViewMembers = 'view-members';
     case RemoveMember = 'remove-member';
 
+    // Policies, owner-only. One action covers every policy: they are all owner-only and all edited from
+    // the same page, so a case per policy would only ever be granted and denied together.
+    case ViewPolicies = 'view-policies';
+    case EditPolicies = 'edit-policies';
+
     // Invitations, owner-only. Accepting and declining are invitee actions, not governed by this voter.
     case ViewInvitations = 'view-invitations';
     case InviteMember = 'invite-member';
@@ -41,6 +46,12 @@ enum OrganizationActions: string
     case RevokeInvitation = 'revoke-invitation';
 
     case View = 'view';
+
+    /**
+     * Membership alone, without the compliance every other action requires. For the argument resolvers,
+     * which run before the action's own guard: on {@see self::View} they would 404 a suspended member.
+     */
+    case Visible = 'visible';
 
     // Any org member may leave on their own.
     case Leave = 'leave';

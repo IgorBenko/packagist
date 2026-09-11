@@ -28,6 +28,7 @@ menu:
     organization_overview: Overview
     organization_teams: Teams
     organization_members: Members
+    organization_policies: Policies
     organization_settings: Settings
     organization_audit_log: Audit log
 
@@ -241,6 +242,12 @@ audit_log:
         organization_member_joined: Member joined
         organization_member_removed: Member removed
         organization_member_left: Member left
+        organization_two_factor_enforcement_enabled: Two-factor enforcement enabled
+        organization_two_factor_enforcement_disabled: Two-factor enforcement disabled
+        organization_allowed_email_domains_set: Email address domains required
+        organization_allowed_email_domains_cleared: Email address domain requirement cleared
+        organization_member_access_suspended: Member access suspended
+        organization_member_access_restored: Member access restored
         organization_invitation_sent: Invitation sent
         organization_invitation_resent: Invitation resent
         organization_invitation_revoked: Invitation revoked

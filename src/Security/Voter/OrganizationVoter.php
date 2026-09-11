@@ -16,6 +16,8 @@ use App\Entity\Organization;
 use App\Entity\OrganizationMemberRepository;
 use App\Entity\OrganizationTeamMemberRepository;
 use App\Entity\User;
+use App\Organization\Domain\PolicyComplianceReason;
+use App\Organization\OrganizationPolicyEnforcer;
 use Symfony\Bundle\SecurityBundle\Security;
 use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
 use Symfony\Component\Security\Core\Authorization\Voter\Vote;
@@ -30,6 +32,7 @@ class OrganizationVoter extends Voter
         private Security $security,
         private OrganizationTeamMemberRepository $organizationTeamMemberRepo,
         private OrganizationMemberRepository $organizationMemberRepo,
+        private OrganizationPolicyEnforcer $policyEnforcer,
     ) {
     }
 
@@ -69,17 +72,16 @@ class OrganizationVoter extends Voter
     }
 
     /**
-     * The reason the action is denied, or null when it is allowed. Each owner action changes the
-     * org, so management requires an active owner with 2FA; the reasons are ordered so the most
-     * fundamental obstacle wins, and {@see OrganizationAccessDeniedReason::TwoFactorRequired} is
-     * only reported for an owner of a live org, matching what the access-denied listener acts on.
+     * Standing in the org first, then compliance with its policies: a non-owner is told that, rather than
+     * being sent to enable 2FA for an action that would stay out of reach once they had.
      */
     private function denialReason(OrganizationActions $action, Organization $organization, User $user): ?OrganizationAccessDeniedReason
     {
-        return match ($action) {
+        $standing = match ($action) {
             // Owners have no visibility into a hidden org, so restore is packagist-admin only.
             OrganizationActions::Restore => OrganizationAccessDeniedReason::AdminOnly,
             OrganizationActions::View,
+            OrganizationActions::Visible,
             OrganizationActions::ViewMembers,
             OrganizationActions::ViewTeams,
             OrganizationActions::Leave => $this->memberDenialReason($organization, $user),
@@ -92,10 +94,49 @@ class OrganizationVoter extends Voter
             OrganizationActions::AddTeamMember,
             OrganizationActions::RemoveTeamMember,
             OrganizationActions::RemoveMember,
+            OrganizationActions::ViewPolicies,
+            OrganizationActions::EditPolicies,
             OrganizationActions::ViewInvitations,
             OrganizationActions::InviteMember,
             OrganizationActions::ResendInvitation,
             OrganizationActions::RevokeInvitation => $this->manageDenialReason($organization, $user),
+        };
+
+        if ($standing !== null) {
+            return $standing;
+        }
+
+        // Leave is exempt so a suspended member is never trapped, Visible is standing only by definition.
+        // Everything else, viewing the org included, requires compliance.
+        if (\in_array($action, [OrganizationActions::Visible, OrganizationActions::Leave], true)) {
+            return null;
+        }
+
+        return $this->complianceDenialReason($organization, $user);
+    }
+
+    /**
+     * Reached only once their standing is established, so a member is re-verified on every org page they
+     * load and nobody else pays for the lookups.
+     */
+    private function complianceDenialReason(Organization $organization, User $user): ?OrganizationAccessDeniedReason
+    {
+        $unmet = $this->policyEnforcer->enforce($organization, $user);
+        if ($unmet->isEmpty()) {
+            return null;
+        }
+
+        // No single remedy answers several failures, so the listener renders the notice listing them all.
+        $sole = $unmet->sole();
+        if ($sole === null) {
+            return OrganizationAccessDeniedReason::PolicySuspended;
+        }
+
+        // A match, so a new policy forces a decision here about whether it can name a remedy of its own.
+        return match ($sole) {
+            PolicyComplianceReason::TwoFactor => OrganizationAccessDeniedReason::TwoFactorRequired,
+            // Changing an account email has no single page worth redirecting to, so the notice explains it.
+            PolicyComplianceReason::EmailDomain => OrganizationAccessDeniedReason::PolicySuspended,
         };
     }
 
@@ -110,11 +151,11 @@ class OrganizationVoter extends Voter
 
     private function manageDenialReason(Organization $organization, User $user): ?OrganizationAccessDeniedReason
     {
-        return match (true) {
-            !$this->isOwner($organization, $user) => OrganizationAccessDeniedReason::NotAnOwner,
-            !$user->isTotpAuthenticationEnabled() => OrganizationAccessDeniedReason::TwoFactorRequired,
-            default => null,
-        };
+        if (!$this->isOwner($organization, $user)) {
+            return OrganizationAccessDeniedReason::NotAnOwner;
+        }
+
+        return null;
     }
 
     private function deny(?Vote $vote, OrganizationAccessDeniedReason $reason): bool

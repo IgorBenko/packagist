@@ -14,6 +14,8 @@ namespace App\Tests\Controller;
 
 use App\Audit\AuditRecordType;
 use App\Entity\AuditRecord;
+use App\Organization\Domain\PolicyComplianceReason;
+use App\Organization\Domain\UnmetPolicies;
 use App\Tests\IntegrationTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -37,6 +39,32 @@ class TransparencyLogControllerTest extends IntegrationTestCase
         $link = $crawler->filter('a[href="/organizations/acme"]');
         static::assertCount(1, $link);
         static::assertSame('ACME Corp', trim($link->text()));
+    }
+
+    public function testSuspensionDoesNotNameThePolicyOnTheTransparencyLog(): void
+    {
+        $user = self::createUser('onlooker', 'onlooker@example.com', roles: ['ROLE_USER']);
+        $member = self::createUser('member', 'member@example.com', roles: ['ROLE_USER']);
+        $organization = self::createOrganization('acme', 'ACME Corp');
+        $this->store($user, $member, $organization);
+
+        $this->store(AuditRecord::organizationMemberAccessSuspended(
+            $organization->id,
+            $organization->slug,
+            $organization->displayName,
+            $member,
+            new UnmetPolicies(PolicyComplianceReason::TwoFactor),
+        ));
+
+        $this->client->loginUser($user);
+        $crawler = $this->client->request('GET', '/transparency-log');
+        static::assertResponseIsSuccessful();
+
+        // The suspension is public; which policy it was for is not, since that advertises a missing second
+        // factor. The org's own audit log does name it.
+        $details = $crawler->filter('td.audit-log-details')->text();
+        static::assertStringContainsString('was suspended for failing an organization policy', $details);
+        static::assertStringNotContainsString('two-factor', $details);
     }
 
     #[DataProvider('filterProvider')]

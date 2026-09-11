@@ -15,11 +15,13 @@ namespace App\Controller;
 use App\Entity\Organization;
 use App\Entity\OrganizationInvitation;
 use App\Entity\OrganizationMemberRepository;
+use App\Entity\OrganizationPolicyRepository;
 use App\Entity\User;
 use App\Form\Type\InvitationConfirmType;
 use App\Organization\Domain\Exception\OrganizationException;
 use App\Organization\Domain\Slug;
 use App\Organization\InvitationManager;
+use App\Organization\MemberPolicyFactsResolver;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
@@ -40,6 +42,8 @@ class OrganizationInvitationController extends Controller
 {
     public function __construct(
         private readonly OrganizationMemberRepository $organizationMemberRepo,
+        private readonly OrganizationPolicyRepository $organizationPolicyRepo,
+        private readonly MemberPolicyFactsResolver $policyFacts,
         private readonly InvitationManager $invitationManager,
     ) {
     }
@@ -47,6 +51,7 @@ class OrganizationInvitationController extends Controller
     #[Route(path: '/organizations/{organization}/invitations/{invitation}/{token}', name: 'organization_invitation_show', methods: ['GET'], requirements: ['organization' => Slug::PATTERN, 'invitation' => Requirement::ULID, 'token' => '[a-f0-9]{64}'])]
     public function show(Organization $organization, OrganizationInvitation $invitation, string $token, #[CurrentUser] User $user): Response
     {
+        $policies = $this->organizationPolicyRepo->policiesFor($organization->id);
         $targetsOwners = \in_array($organization->ownersTeamId->toRfc4122(), $invitation->teamIds, true);
 
         return $this->render('organization/invitation_show.html.twig', [
@@ -54,7 +59,13 @@ class OrganizationInvitationController extends Controller
             'invitation' => $invitation,
             'token' => $token,
             'alreadyMember' => $this->organizationMemberRepo->findOneByOrgAndUser($organization->id, $user->getId()) !== null,
-            'needsTwoFactor' => $targetsOwners && !$user->isTotpAuthenticationEnabled(),
+            // Only for the wording; that owners owe 2FA comes out of unmetBy() via the ownership fact.
+            'targetsOwners' => $targetsOwners,
+            // Resolved the same way the accept itself resolves it, so the checklist matches what would
+            // refuse them.
+            'remediations' => $policies->remediationsFor(
+                $policies->unmetBy($this->policyFacts->forUser($user)->withOwnership($targetsOwners)),
+            ),
             'acceptForm' => $this->createForm(InvitationConfirmType::class)->createView(),
             'declineForm' => $this->createForm(InvitationConfirmType::class)->createView(),
         ]);

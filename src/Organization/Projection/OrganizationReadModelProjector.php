@@ -18,6 +18,8 @@ use App\Entity\OrganizationStatus;
 use App\Entity\OrganizationTeam;
 use App\Entity\OrganizationMember;
 use App\Entity\OrganizationMemberRepository;
+use App\Entity\OrganizationPolicy;
+use App\Entity\OrganizationPolicyRepository;
 use App\Entity\OrganizationTeamMember;
 use App\Entity\OrganizationTeamMemberRepository;
 use App\Entity\OrganizationTeamRepository;
@@ -26,9 +28,12 @@ use App\Entity\SlugReservationKind;
 use App\Entity\SlugReservationRepository;
 use App\Entity\User;
 use App\Entity\UserRepository;
+use App\Organization\Domain\Event\AllowedEmailDomainsEdited;
 use App\Organization\Domain\Event\InvitationEvent;
 use App\Organization\Domain\Event\MemberJoined;
 use App\Organization\Domain\Event\MemberLeft;
+use App\Organization\Domain\Event\MemberPolicyComplianceFailed;
+use App\Organization\Domain\Event\MemberPolicyComplianceRestored;
 use App\Organization\Domain\Event\MemberRemoved;
 use App\Organization\Domain\Event\OrganizationCreated;
 use App\Organization\Domain\Event\OrganizationNameChanged;
@@ -38,6 +43,8 @@ use App\Organization\Domain\Event\TeamDeleted;
 use App\Organization\Domain\Event\TeamMemberAdded;
 use App\Organization\Domain\Event\TeamMemberRemoved;
 use App\Organization\Domain\Event\TeamRenamed;
+use App\Organization\Domain\Event\TwoFactorEnforcementEdited;
+use App\Organization\Domain\UnmetPolicies;
 use App\Organization\EventStore\RecordedEvent;
 use App\Util\DoctrineTrait;
 use Doctrine\Persistence\ManagerRegistry;
@@ -61,6 +68,7 @@ final readonly class OrganizationReadModelProjector implements Projector
         private OrganizationTeamRepository $organizationTeamRepo,
         private OrganizationTeamMemberRepository $organizationTeamMemberRepo,
         private OrganizationMemberRepository $organizationMemberRepo,
+        private OrganizationPolicyRepository $organizationPolicyRepo,
     ) {
     }
 
@@ -85,6 +93,10 @@ final readonly class OrganizationReadModelProjector implements Projector
             $event instanceof TeamDeleted => $this->teamDeleted($event),
             $event instanceof MemberRemoved => $this->memberGone($event->organizationId, $event->userId),
             $event instanceof MemberLeft => $this->memberGone($event->organizationId, $event->userId),
+            $event instanceof TwoFactorEnforcementEdited => $this->twoFactorEnforcementEdited($recorded, $event),
+            $event instanceof AllowedEmailDomainsEdited => $this->allowedEmailDomainsEdited($recorded, $event),
+            $event instanceof MemberPolicyComplianceFailed => $this->suspendMember($event),
+            $event instanceof MemberPolicyComplianceRestored => $this->restoreMember($event),
             default => throw new \LogicException('Unhandled event: ' . $event->eventType()->value),
         };
 
@@ -160,6 +172,51 @@ final readonly class OrganizationReadModelProjector implements Projector
         $this->getEM()->persist(new OrganizationMember($event->organizationId, $event->userId, $recorded->occurredAt));
     }
 
+    /**
+     * The policy row is created on demand: an org that has never set a policy simply has no row, which
+     * every reader treats as all policies inactive.
+     */
+    private function twoFactorEnforcementEdited(RecordedEvent $recorded, TwoFactorEnforcementEdited $event): void
+    {
+        $policy = $this->policy($event->organizationId, $recorded);
+        $policy->enforceTwoFactor = $event->enforced;
+        $policy->updatedAt = $recorded->occurredAt;
+    }
+
+    private function allowedEmailDomainsEdited(RecordedEvent $recorded, AllowedEmailDomainsEdited $event): void
+    {
+        $policy = $this->policy($event->organizationId, $recorded);
+        $policy->allowedEmailDomains = $event->allowedEmailDomains->toValues();
+        $policy->updatedAt = $recorded->occurredAt;
+    }
+
+    /** Created on demand with every policy at its default, so an org that never set one simply has no row. */
+    private function policy(Ulid $organizationId, RecordedEvent $recorded): OrganizationPolicy
+    {
+        $policy = $this->organizationPolicyRepo->findForOrg($organizationId);
+        if ($policy === null) {
+            $policy = new OrganizationPolicy($organizationId, false, $recorded->occurredAt);
+            $this->getEM()->persist($policy);
+        }
+
+        return $policy;
+    }
+
+    private function suspendMember(MemberPolicyComplianceFailed $event): void
+    {
+        $member = $this->member($event->organizationId, $event->userId);
+        $member->suspendedPolicies = $event->unmetPolicies;
+        // Derived, so the flag can never claim a suspension the set does not name.
+        $member->suspended = !$member->suspendedPolicies->isEmpty();
+    }
+
+    private function restoreMember(MemberPolicyComplianceRestored $event): void
+    {
+        $member = $this->member($event->organizationId, $event->userId);
+        $member->suspended = false;
+        $member->suspendedPolicies = UnmetPolicies::none();
+    }
+
     private function teamDeleted(TeamDeleted $event): void
     {
         foreach ($this->organizationTeamMemberRepo->findByTeam($event->teamId) as $member) {
@@ -200,6 +257,20 @@ final readonly class OrganizationReadModelProjector implements Projector
         }
 
         return $organization;
+    }
+
+    /**
+     * A compliance event always follows the member's MemberJoined, so the row must exist by now; a miss
+     * signals an inconsistent projection rather than a normal state.
+     */
+    private function member(Ulid $orgId, int $userId): OrganizationMember
+    {
+        $member = $this->organizationMemberRepo->findOneByOrgAndUser($orgId, $userId);
+        if ($member === null) {
+            throw new \LogicException('Organization member read model not found for '.$orgId->toRfc4122().' / user '.$userId.'.');
+        }
+
+        return $member;
     }
 
     private function team(Ulid $teamId): OrganizationTeam

@@ -18,6 +18,7 @@ use App\Audit\AuditRecordType;
 use App\Audit\Display\OrganizationDisplay;
 use App\Audit\UserRegistrationMethod;
 use App\Audit\VersionDeletionReason;
+use App\Organization\Domain\UnmetPolicies;
 use Composer\Pcre\Preg;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
@@ -379,6 +380,81 @@ class AuditRecord
     public static function organizationInvitationExpired(Ulid $organizationId, string $slug, string $displayName, string $email): self
     {
         return self::organizationInvitation(AuditRecordType::OrganizationInvitationExpired, $organizationId, $slug, $displayName, $email, null);
+    }
+
+    /**
+     * The org started or stopped requiring two-factor authentication from its members. The suspensions or
+     * restorations this causes are logged separately, one organization_member_access_* entry per member.
+     */
+    public static function organizationTwoFactorEnforcementEdited(Ulid $organizationId, string $slug, string $displayName, bool $enforced, ?User $actor): self
+    {
+        return new self(
+            $enforced ? AuditRecordType::OrganizationTwoFactorEnforcementEnabled : AuditRecordType::OrganizationTwoFactorEnforcementDisabled,
+            [
+                'organization' => new OrganizationDisplay((string) $organizationId, $slug, $displayName)->toRecord(),
+                'actor' => self::getUserData($actor),
+            ],
+            $actor?->getId(),
+            organizationId: $organizationId,
+        );
+    }
+
+    /**
+     * The domains are public: they describe the org, not a person, unlike the policies a suspension names.
+     *
+     * @param list<string> $domains the resulting set, empty when the requirement was cleared
+     */
+    public static function organizationAllowedEmailDomainsEdited(Ulid $organizationId, string $slug, string $displayName, array $domains, ?User $actor): self
+    {
+        return new self(
+            $domains === [] ? AuditRecordType::OrganizationAllowedEmailDomainsCleared : AuditRecordType::OrganizationAllowedEmailDomainsSet,
+            [
+                'organization' => new OrganizationDisplay((string) $organizationId, $slug, $displayName)->toRecord(),
+                'domains' => $domains,
+                'actor' => self::getUserData($actor),
+            ],
+            $actor?->getId(),
+            organizationId: $organizationId,
+        );
+    }
+
+    /**
+     * A member's access was suspended for failing an active org policy, or restored once they satisfied it
+     * again. The policies are recorded so the org's own audit log can say what the member has to fix;
+     * whether they are shown is {@see \App\Audit\Display\AuditLogDisplayFactory}'s call, which keeps them
+     * off the public transparency log so it cannot advertise who is missing a security control.
+     */
+    public static function organizationMemberAccessSuspended(Ulid $organizationId, string $slug, string $displayName, ?User $member, UnmetPolicies $unmetPolicies): self
+    {
+        return self::organizationMemberCompliance(
+            AuditRecordType::OrganizationMemberAccessSuspended,
+            $organizationId,
+            $slug,
+            $displayName,
+            $member,
+            $unmetPolicies,
+        );
+    }
+
+    public static function organizationMemberAccessRestored(Ulid $organizationId, string $slug, string $displayName, ?User $member): self
+    {
+        return self::organizationMemberCompliance(AuditRecordType::OrganizationMemberAccessRestored, $organizationId, $slug, $displayName, $member, UnmetPolicies::none());
+    }
+
+    private static function organizationMemberCompliance(AuditRecordType $type, Ulid $organizationId, string $slug, string $displayName, ?User $member, UnmetPolicies $unmetPolicies): self
+    {
+        return new self(
+            $type,
+            [
+                'organization' => new OrganizationDisplay((string) $organizationId, $slug, $displayName)->toRecord(),
+                'user' => self::getUserData($member),
+                'policies' => $unmetPolicies->toValues(),
+                // No human triggers a compliance transition: it falls out of verifying the member.
+                'actor' => self::getUserData(null, 'automation'),
+            ],
+            organizationId: $organizationId,
+            userId: $member?->getId(),
+        );
     }
 
     private static function organizationInvitation(AuditRecordType $type, Ulid $organizationId, string $slug, string $displayName, string $email, ?User $actor): self
