@@ -94,6 +94,7 @@ class AuditLogDisplayFactory extends AbstractLogDisplayFactory
                 $record->ip,
             ),
             AuditLogEventType::VersionCreated => new Event\VersionCreatedDisplay(
+                $record->type,
                 $record->datetime,
                 $record->attributes['name'],
                 $record->attributes['version'],
@@ -101,6 +102,7 @@ class AuditLogDisplayFactory extends AbstractLogDisplayFactory
                 $record->attributes['metadata']['dist']['reference'] ?? null,
                 $this->buildActor($record->attributes['actor']),
                 $record->ip,
+                $record->attributes['metadata']['dist']['shasum'] ?? null,
             ),
             AuditLogEventType::PackageAbandoned => new Event\PackageAbandonedDisplay(
                 $record->type,
