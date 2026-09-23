@@ -48,11 +48,12 @@ class OrganizationTeamResolverTest extends TestCase
             ->with('acme', self::callback(static fn (Ulid $id): bool => (string) $id === $teamId))
             ->willReturn($team);
 
-        // Read access to the team's own organization is required as defense in depth.
+        // Standing in the team's own organization is required as defense in depth, without its policy
+        // compliance: a suspended member is refused by the action's own guard, not by a 404 from here.
         $security = $this->createMock(Security::class);
         $security->expects(self::once())
             ->method('isGranted')
-            ->with(OrganizationActions::View->value, $team->organization)
+            ->with(OrganizationActions::Visible->value, $team->organization)
             ->willReturn(true);
         $resolver = new OrganizationTeamResolver($teams, $security);
 

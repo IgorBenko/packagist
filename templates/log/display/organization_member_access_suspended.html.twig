@@ -1,0 +1,3 @@
+{% import 'log/macros.html.twig' as log %}
+
+<strong>{{ log.userLink(display.member.username) }}</strong>'s access to <strong>{{ log.organizationLink(display.organization) }}</strong> was suspended for failing an organization policy{% if display.policies.reasons %}: {{ display.policies.reasons|map(reason => reason.label)|join(', ') }}{% endif %}

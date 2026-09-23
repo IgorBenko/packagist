@@ -29,8 +29,10 @@ use App\Log\Display\Event\GenericUserDisplay;
 use App\Log\Display\Event\GitHubLinkedWithUserDisplay;
 use App\Log\Display\Event\MaintainerAddedDisplay;
 use App\Log\Display\Event\MaintainerRemovedDisplay;
+use App\Log\Display\Event\OrganizationAllowedEmailDomainsDisplay;
 use App\Log\Display\Event\OrganizationCreatedDisplay;
 use App\Log\Display\Event\OrganizationInvitationDisplay;
+use App\Log\Display\Event\OrganizationMemberComplianceDisplay;
 use App\Log\Display\Event\OrganizationMemberJoinedDisplay;
 use App\Log\Display\Event\OrganizationMemberLeftDisplay;
 use App\Log\Display\Event\OrganizationMemberRemovedDisplay;
@@ -41,6 +43,7 @@ use App\Log\Display\Event\OrganizationTeamDeletedDisplay;
 use App\Log\Display\Event\OrganizationTeamMemberAddedDisplay;
 use App\Log\Display\Event\OrganizationTeamMemberRemovedDisplay;
 use App\Log\Display\Event\OrganizationTeamRenamedDisplay;
+use App\Log\Display\Event\OrganizationTwoFactorEnforcementDisplay;
 use App\Log\Display\Event\PackageAbandonedDisplay;
 use App\Log\Display\Event\PackageCreatedDisplay;
 use App\Log\Display\Event\PackageDeletedDisplay;
@@ -62,6 +65,7 @@ use App\Log\Display\Event\VersionDeletedDisplay;
 use App\Log\Display\Event\VersionRecoveredDisplay;
 use App\Log\Display\Event\VersionReferenceChangeBlockedDisplay;
 use App\Log\Display\Event\VersionSoftDeletedDisplay;
+use App\Organization\Domain\UnmetPolicies;
 use Symfony\Bundle\SecurityBundle\Security;
 
 class AuditLogDisplayFactory
@@ -76,21 +80,21 @@ class AuditLogDisplayFactory
      *
      * @return array<LogDisplayInterface>
      */
-    public function build(iterable $auditRecords, bool $revealEmails = false): array
+    public function build(iterable $auditRecords, bool $revealMemberDetails = false): array
     {
         $displays = [];
         foreach ($auditRecords as $record) {
-            $displays[] = $this->buildSingle($record, $revealEmails);
+            $displays[] = $this->buildSingle($record, $revealMemberDetails);
         }
 
         return $displays;
     }
 
     /**
-     * $revealEmails skips obfuscation for viewers already authorized to see them (e.g. the
+     * $revealMemberDetails skips obfuscation for viewers already authorized to see them (e.g. the
      * organization-internal audit log, gated by ViewAuditLog), unlike the public transparency log.
      */
-    public function buildSingle(AuditRecord $record, bool $revealEmails = false): LogDisplayInterface
+    public function buildSingle(AuditRecord $record, bool $revealMemberDetails = false): LogDisplayInterface
     {
         return match ($record->type) {
             AuditLogEventType::MaintainerAdded => new MaintainerAddedDisplay(
@@ -475,6 +479,33 @@ class AuditLogDisplayFactory
                 $this->buildActor($record->attributes['actor']),
                 $record->ip,
             ),
+            AuditLogEventType::OrganizationTwoFactorEnforcementEnabled,
+            AuditLogEventType::OrganizationTwoFactorEnforcementDisabled => new OrganizationTwoFactorEnforcementDisplay(
+                $record->type,
+                $record->datetime,
+                OrganizationDisplay::fromRecord($record->attributes['organization']),
+                $this->buildActor($record->attributes['actor']),
+                $record->ip,
+            ),
+            AuditLogEventType::OrganizationAllowedEmailDomainsSet,
+            AuditLogEventType::OrganizationAllowedEmailDomainsCleared => new OrganizationAllowedEmailDomainsDisplay(
+                $record->type,
+                $record->datetime,
+                OrganizationDisplay::fromRecord($record->attributes['organization']),
+                array_values(array_map(strval(...), (array) ($record->attributes['domains'] ?? []))),
+                $this->buildActor($record->attributes['actor']),
+                $record->ip,
+            ),
+            AuditLogEventType::OrganizationMemberAccessSuspended,
+            AuditLogEventType::OrganizationMemberAccessRestored => new OrganizationMemberComplianceDisplay(
+                $record->type,
+                $record->datetime,
+                OrganizationDisplay::fromRecord($record->attributes['organization']),
+                $this->buildActor($record->attributes['user']),
+                $this->unmetPolicies($record->attributes['policies'] ?? [], $revealMemberDetails),
+                $this->buildActor($record->attributes['actor']),
+                $record->ip,
+            ),
             AuditLogEventType::OrganizationInvitationSent,
             AuditLogEventType::OrganizationInvitationResent,
             AuditLogEventType::OrganizationInvitationRevoked,
@@ -484,7 +515,7 @@ class AuditLogDisplayFactory
                 $record->type,
                 $record->datetime,
                 OrganizationDisplay::fromRecord($record->attributes['organization']),
-                $this->obfuscateEmail($record->attributes['email'], revealEmails: $revealEmails),
+                $this->obfuscateEmail($record->attributes['email'], revealMemberDetails: $revealMemberDetails),
                 $this->buildActor($record->attributes['actor']),
                 $record->ip,
             ),
@@ -508,6 +539,25 @@ class AuditLogDisplayFactory
     }
 
     /**
+     * Empty unless the viewer is entitled to them: naming the policy on the public transparency log would
+     * advertise which accounts have no second factor.
+     */
+    private function unmetPolicies(mixed $policies, bool $revealMemberDetails): UnmetPolicies
+    {
+        if (!$revealMemberDetails && !$this->security->isGranted('ROLE_AUDITOR')) {
+            return UnmetPolicies::none();
+        }
+
+        if (!\is_array($policies)) {
+            return UnmetPolicies::none();
+        }
+
+        // fromValues() skips what it does not recognise, which is what a record naming a retired policy
+        // needs, so the tolerance lives in one place rather than being repeated here.
+        return UnmetPolicies::fromValues(array_values(array_map(strval(...), $policies)));
+    }
+
+    /**
      * Admin-only deletion reasons may contain PII, so only auditors (who can also see IPs/emails) see them.
      */
     private function internalReason(?string $reason): ?string
@@ -519,9 +569,9 @@ class AuditLogDisplayFactory
         return $this->security->isGranted('ROLE_AUDITOR') ? $reason : null;
     }
 
-    private function obfuscateEmail(string $email, ?int $userId = null, bool $revealEmails = false): string
+    private function obfuscateEmail(string $email, ?int $userId = null, bool $revealMemberDetails = false): string
     {
-        if ($revealEmails || $this->security->isGranted('ROLE_AUDITOR')) {
+        if ($revealMemberDetails || $this->security->isGranted('ROLE_AUDITOR')) {
             return $email;
         }
 

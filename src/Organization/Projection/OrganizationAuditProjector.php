@@ -20,9 +20,12 @@ use App\Entity\OrganizationRepository;
 use App\Entity\OrganizationTeamRepository;
 use App\Entity\User;
 use App\Entity\UserRepository;
+use App\Organization\Domain\Event\AllowedEmailDomainsEdited;
 use App\Organization\Domain\Event\InvitationEvent;
 use App\Organization\Domain\Event\MemberJoined;
 use App\Organization\Domain\Event\MemberLeft;
+use App\Organization\Domain\Event\MemberPolicyComplianceFailed;
+use App\Organization\Domain\Event\MemberPolicyComplianceRestored;
 use App\Organization\Domain\Event\MemberRemoved;
 use App\Organization\Domain\Event\OrganizationCreated;
 use App\Organization\Domain\Event\OrganizationNameChanged;
@@ -32,6 +35,7 @@ use App\Organization\Domain\Event\TeamDeleted;
 use App\Organization\Domain\Event\TeamMemberAdded;
 use App\Organization\Domain\Event\TeamMemberRemoved;
 use App\Organization\Domain\Event\TeamRenamed;
+use App\Organization\Domain\Event\TwoFactorEnforcementEdited;
 use App\Organization\Domain\Event\UserInvitationAccepted;
 use App\Organization\Domain\Event\UserInvitationDeclined;
 use App\Organization\Domain\Event\UserInvitationExpired;
@@ -69,6 +73,19 @@ final readonly class OrganizationAuditProjector implements Projector
             return;
         }
 
+        // A compliance transition falls out of verifying a member rather than being triggered by anyone, so
+        // like invitation expiry it has no acting user and is projected before the actor check.
+        if ($event instanceof MemberPolicyComplianceFailed || $event instanceof MemberPolicyComplianceRestored) {
+            $org = $this->organization($event->organizationId);
+            $member = $this->user($event->userId);
+
+            $this->auditRecordRepo->insert($event instanceof MemberPolicyComplianceFailed
+                ? AuditRecord::organizationMemberAccessSuspended($event->organizationId, $org->slug, $org->displayName, $member, $event->unmetPolicies)
+                : AuditRecord::organizationMemberAccessRestored($event->organizationId, $org->slug, $org->displayName, $member));
+
+            return;
+        }
+
         $actor = $this->user($recorded->actor->userId);
         if ($actor === null) {
             throw new \RuntimeException('Missing actor: ' . $recorded->actor->userId);
@@ -100,6 +117,8 @@ final readonly class OrganizationAuditProjector implements Projector
                 $event instanceof TeamMemberRemoved => AuditRecord::organizationTeamMemberRemoved($event->organizationId, $org->slug, $org->displayName, $this->teamName($event->teamId), $this->requireUser($event->userId), $actor),
                 $event instanceof MemberRemoved => AuditRecord::organizationMemberRemoved($event->organizationId, $org->slug, $org->displayName, $this->requireUser($event->userId), $actor),
                 $event instanceof MemberLeft => AuditRecord::organizationMemberLeft($event->organizationId, $org->slug, $org->displayName, $this->requireUser($event->userId), $actor),
+                $event instanceof TwoFactorEnforcementEdited => AuditRecord::organizationTwoFactorEnforcementEdited($event->organizationId, $org->slug, $org->displayName, $event->enforced, $actor),
+                $event instanceof AllowedEmailDomainsEdited => AuditRecord::organizationAllowedEmailDomainsEdited($event->organizationId, $org->slug, $org->displayName, $event->allowedEmailDomains->toValues(), $actor),
                 default => throw new \LogicException('Unhandled event: ' . $event->eventType()->value),
             }
         );

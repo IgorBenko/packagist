@@ -113,18 +113,20 @@ final class Invitation extends AbstractAggregate
     }
 
     /**
-     * The invitee accepts. The caller has validated the link token and resolved which target teams still
-     * exist ($acceptedTeamIds) and whether the owners team is among them ($ownersAmongTeams).
+     * The invitee accepts. The caller has validated the link token, resolved which target teams still exist
+     * and evaluated the org's policies against the joiner, including the ownership those teams would give
+     * them.
      *
-     * @param list<Ulid> $acceptedTeamIds the still-existing target teams the user will join
+     * @param list<Ulid>              $acceptedTeamIds    the still-existing target teams the user will join
+     * @param list<PolicyRemediation> $unmetRemediations  what the joiner must do before they may accept
      *
      * @throws InvitationNotPendingException
      * @throws NoPendingInvitationException the invitation has lapsed
      * @throws AlreadyMemberException        the invitee already belongs to the organization
      * @throws TeamNotFoundException         none of the target teams exist any more
-     * @throws PolicyNotMetException         joining owners requires 2FA
+     * @throws PolicyNotMetException         the org's policies are unmet, 2FA for a would-be owner among them
      */
-    public function accept(int $userId, bool $alreadyMember, array $acceptedTeamIds, bool $ownersAmongTeams, bool $hasTwoFactor, \DateTimeImmutable $now): void
+    public function accept(int $userId, bool $alreadyMember, array $acceptedTeamIds, array $unmetRemediations, \DateTimeImmutable $now): void
     {
         if (!$this->status->isPending()) {
             throw new InvitationNotPendingException('This invitation is no longer pending.');
@@ -142,8 +144,14 @@ final class Invitation extends AbstractAggregate
             throw new TeamNotFoundException('None of the invited teams exist any more.');
         }
 
-        if ($ownersAmongTeams && !$hasTwoFactor) {
-            throw new PolicyNotMetException('You must enable two-factor authentication before becoming an owner.');
+        // The invitation stays pending while they sort this out, and the same link works once they have.
+        // 2FA for a would-be owner is one of these rather than a check of its own, since the caller resolves
+        // ownership from the invited teams.
+        if ($unmetRemediations !== []) {
+            throw new PolicyNotMetException('This invitation cannot be accepted yet: '.implode(' ', array_map(
+                static fn (PolicyRemediation $remediation): string => $remediation->text,
+                $unmetRemediations,
+            )));
         }
 
         $this->record(new UserInvitationAccepted($this->id, $this->email, $userId, $acceptedTeamIds));
@@ -243,6 +251,7 @@ final class Invitation extends AbstractAggregate
             OrganizationEventType::UserInvitationAccepted => UserInvitationAccepted::fromPayload($id, $payload),
             OrganizationEventType::UserInvitationExpired => UserInvitationExpired::fromPayload($id, $payload),
             // The org-stream event types never appear in an invitation's history.
+            OrganizationEventType::AllowedEmailDomainsEdited,
             OrganizationEventType::OrganizationCreated,
             OrganizationEventType::OrganizationNameChanged,
             OrganizationEventType::OrganizationSlugChanged,
@@ -253,7 +262,10 @@ final class Invitation extends AbstractAggregate
             OrganizationEventType::TeamDeleted,
             OrganizationEventType::MemberJoined,
             OrganizationEventType::MemberRemoved,
-            OrganizationEventType::MemberLeft => throw new \LogicException('Not an invitation-stream event: '.$type->value),
+            OrganizationEventType::MemberLeft,
+            OrganizationEventType::TwoFactorEnforcementEdited,
+            OrganizationEventType::MemberPolicyComplianceFailed,
+            OrganizationEventType::MemberPolicyComplianceRestored => throw new \LogicException('Not an invitation-stream event: '.$type->value),
         };
     }
 }
