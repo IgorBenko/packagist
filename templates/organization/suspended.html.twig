@@ -17,7 +17,7 @@
 
     <h4>What you need to do</h4>
 
-    <ul>
+    <ul class="policy-remediations">
         {% for remediation in remediations %}
             {{ include('organization/_policy_remediation.html.twig', { remediation: remediation }) }}
         {% endfor %}
