@@ -319,7 +319,7 @@ class OrganizationControllerTest extends IntegrationTestCase
         self::assertResponseIsSuccessful();
         self::assertSame(
             'Does not meet: two-factor authentication, email address domain',
-            $crawler->filter('.label-danger:contains("suspended")')->attr('title'),
+            $crawler->filter('.badge.bg-danger:contains("suspended")')->attr('title'),
         );
     }
 
@@ -397,7 +397,7 @@ class OrganizationControllerTest extends IntegrationTestCase
         $crawler = $this->client->request('GET', '/organizations/acme');
         self::assertResponseStatusCodeSame(403);
         self::assertStringContainsString('Your access to this organization is suspended', $crawler->filter('.alert')->text());
-        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.col-md-9 ul')->text());
+        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.policy-remediations')->text());
 
         // Leaving survives, so they are never trapped, and the notice offers it directly.
         self::assertCount(1, $crawler->filter('a[href="/organizations/acme/members/leave"]'));
@@ -427,7 +427,7 @@ class OrganizationControllerTest extends IntegrationTestCase
         // they owe instead of getting a 404 for a team that plainly exists.
         self::assertResponseStatusCodeSame(403);
         self::assertStringContainsString('Your access to this organization is suspended', $crawler->filter('.alert')->text());
-        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.col-md-9 ul')->text());
+        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.policy-remediations')->text());
     }
 
     public function testTheNoticeClearsItselfOnceTheMemberComplies(): void
@@ -477,8 +477,8 @@ class OrganizationControllerTest extends IntegrationTestCase
 
         // So the notice is rendered in place of the members page.
         self::assertResponseStatusCodeSame(403);
-        self::assertStringContainsString('Enable two-factor authentication', $crawler->filter('.col-md-9 ul')->text());
-        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.col-md-9 ul')->text());
+        self::assertStringContainsString('Enable two-factor authentication', $crawler->filter('.policy-remediations')->text());
+        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.policy-remediations')->text());
     }
 
     public function testMembersListLabelsSuspendedMembersForOwners(): void
@@ -495,7 +495,7 @@ class OrganizationControllerTest extends IntegrationTestCase
         $crawler = $this->client->request('GET', '/organizations/acme/members');
 
         self::assertResponseIsSuccessful();
-        $label = $crawler->filter('.label-danger:contains("suspended")');
+        $label = $crawler->filter('.badge.bg-danger:contains("suspended")');
         self::assertCount(1, $label);
 
         // Third-person form: this row is about someone else, so the member-facing remediation reads wrong.
