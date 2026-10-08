@@ -20,8 +20,6 @@ use Pagerfanta\Doctrine\ORM\QueryAdapter;
  * Counts at most $maxResults rows, so the count stays cheap on a large table. Pair it with
  * Pagerfanta::setMaxNbPages() so no page past the cap is reachable.
  *
- * For queries without joins: it counts the root entity's `id`.
- *
  * @template T
  *
  * @template-implements AdapterInterface<T>

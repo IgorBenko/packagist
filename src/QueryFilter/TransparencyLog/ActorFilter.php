@@ -15,17 +15,17 @@ namespace App\QueryFilter\TransparencyLog;
 use App\Log\TransparencyLogSearchType;
 
 /**
- * Entries about a username, including the maintainers of a transfer.
+ * Entries done by a username.
  */
-class UserFilter extends AbstractSearchIndexFilter
+class ActorFilter extends AbstractSearchIndexFilter
 {
     protected static function key(): string
     {
-        return 'user';
+        return 'actor';
     }
 
     protected static function type(): TransparencyLogSearchType
     {
-        return TransparencyLogSearchType::User;
+        return TransparencyLogSearchType::Actor;
     }
 }
