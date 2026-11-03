@@ -63,7 +63,7 @@ class OrganizationMember
          * their ability to act for the org is inert until they comply again. Denormalised from the policy
          * set so counting suspended members stays a single indexed lookup.
          */
-        #[ORM\Column]
+        #[ORM\Column(options: ['default' => false])]
         public bool $suspended = false,
 
         UnmetPolicies $suspendedPolicies = new UnmetPolicies(),

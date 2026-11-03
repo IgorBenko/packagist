@@ -34,7 +34,7 @@ class OrganizationPolicy
         public readonly Ulid $orgId,
 
         /** Whether every member must have two-factor authentication active. */
-        #[ORM\Column]
+        #[ORM\Column(options: ['default' => false])]
         public bool $enforceTwoFactor,
 
         #[ORM\Column(type: 'datetime_immutable')]
