@@ -137,6 +137,8 @@ class GitHubAuthenticator extends OAuth2Authenticator
 
                 $user->setLastLogin(new \DateTimeImmutable());
                 $user->setEnabled(true);
+                // Only an address GitHub reports as verified gets this far.
+                $user->markEmailVerified(new \DateTimeImmutable());
 
                 $this->getEM()->persist($user);
                 $this->getEM()->flush();

@@ -1,0 +1,4 @@
+{% import 'log/macros.html.twig' as log %}
+
+<strong>{{ log.organizationLink(display.organization) }}</strong> now requires member email addresses on {{ display.domains|join(', ') }}<br>
+Set by: {{ log.userLink(display.actor.username) }}

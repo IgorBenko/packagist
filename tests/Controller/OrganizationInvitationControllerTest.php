@@ -12,6 +12,7 @@
 
 namespace App\Tests\Controller;
 
+use App\Entity\AuditRecord;
 use App\Entity\Organization;
 use App\Entity\OrganizationInvitation;
 use App\Entity\OrganizationInvitationRepository;
@@ -20,10 +21,13 @@ use App\Entity\OrganizationTeam;
 use App\Entity\OrganizationTeamMemberRepository;
 use App\Entity\OrganizationTeamRepository;
 use App\Entity\User;
+use App\Log\AuditLogEventType;
+use App\Organization\Domain\AllowedEmailDomains;
 use App\Organization\Domain\InvitationStatus;
 use App\Organization\InvitationTokenGenerator;
 use App\Organization\OrganizationManager;
 use App\Organization\OrganizationMembershipManager;
+use App\Organization\OrganizationPolicyManager;
 use App\Tests\IntegrationTestCase;
 use Symfony\Component\Uid\Ulid;
 
@@ -232,6 +236,155 @@ class OrganizationInvitationControllerTest extends IntegrationTestCase
         self::assertTrue(
             static::getService(OrganizationTeamMemberRepository::class)->isMemberOfOrg($organization->id, $alice->getId()),
         );
+    }
+
+    public function testInvitationToOwnersNamesTheOwnershipRequirement(): void
+    {
+        [$owner, $organization] = $this->orgWithTeam();
+        // No TOTP secret: owners owe 2FA whether or not the org set the policy, and the same checklist says so.
+        $alice = self::createUser('alice', 'alice@example.org');
+        $this->store($alice);
+
+        $ownersTeam = static::getService(OrganizationTeamRepository::class)->find($organization->ownersTeamId);
+        self::assertNotNull($ownersTeam);
+
+        $this->client->loginUser($owner);
+        $this->submitInvite($ownersTeam, 'alice@example.org');
+        $path = $this->acceptUrlPath();
+
+        $this->client->loginUser($alice);
+        $crawler = $this->client->request('GET', $path);
+
+        self::assertResponseIsSuccessful();
+        $alert = $crawler->filter('.alert-warning')->text();
+        self::assertStringContainsString('makes you an owner', $alert);
+        self::assertStringContainsString('Enable two-factor authentication', $alert);
+    }
+
+    public function testInviteeCannotAcceptWhileAnOrgPolicyIsUnmet(): void
+    {
+        [$owner, $organization, $backend] = $this->orgWithTeam();
+        // No TOTP secret, so alice cannot satisfy the org's 2FA policy yet.
+        $alice = self::createUser('alice', 'alice@example.org');
+        $this->store($alice);
+
+        $this->client->loginUser($owner);
+        $this->submitInvite($backend, 'alice@example.org');
+        $path = $this->acceptUrlPath();
+        static::getService(OrganizationPolicyManager::class)->setPolicies($organization, $owner, true, AllowedEmailDomains::none(), null);
+
+        $this->client->loginUser($alice);
+        $crawler = $this->client->request('GET', $path);
+
+        self::assertResponseIsSuccessful();
+        self::assertStringContainsString('requires the following before you can join', $crawler->filter('.alert-warning')->text());
+
+        // The button is still there, but accepting is refused and the invitation stays pending, so the
+        // same link works once she has enabled 2FA.
+        $this->client->submit($crawler->selectButton('Accept invitation')->form());
+
+        self::assertFalse(
+            static::getService(OrganizationTeamMemberRepository::class)->isMemberOfOrg($organization->id, $alice->getId()),
+        );
+        self::assertSame(InvitationStatus::Pending, $this->pendingInvitation($organization)->status);
+
+        // Once compliant, the same link accepts. The kernel reboots between requests, so alice has to be
+        // reloaded into the current entity manager before she can be changed.
+        $reloaded = static::getEM()->getRepository(User::class)->find($alice->getId());
+        self::assertNotNull($reloaded);
+        $reloaded->setTotpSecret('totp-secret');
+        static::getEM()->flush();
+
+        // Changing the 2FA secret busts the session, so alice signs in again before returning to the link.
+        $this->client->loginUser($reloaded);
+        $crawler = $this->client->request('GET', $path);
+        $this->client->submit($crawler->selectButton('Accept invitation')->form());
+
+        self::assertTrue(
+            static::getService(OrganizationTeamMemberRepository::class)->isMemberOfOrg($organization->id, $alice->getId()),
+        );
+    }
+
+    public function testAcceptingAnInvitationSentToTheAccountAddressConfirmsIt(): void
+    {
+        [$owner, $organization, $backend] = $this->orgWithTeam();
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
+        $alice = self::createUser('alice', 'alice@example.org', emailVerified: false);
+        $this->store($alice);
+
+        $this->client->loginUser($owner);
+        $this->submitInvite($backend, 'Alice@Example.org');
+        $path = $this->acceptUrlPath();
+
+        // The link went to her account's address, so accepting it proves that address: nothing to do first.
+        $this->client->loginUser($alice);
+        $crawler = $this->client->request('GET', $path);
+        self::assertCount(0, $crawler->filter('.alert-warning'));
+
+        $this->client->submit($crawler->selectButton('Accept invitation')->form());
+        self::assertResponseRedirects('/');
+
+        self::assertTrue(
+            static::getService(OrganizationTeamMemberRepository::class)->isMemberOfOrg($organization->id, $alice->getId()),
+        );
+        $reloaded = static::getEM()->getRepository(User::class)->find($alice->getId());
+        self::assertNotNull($reloaded);
+        self::assertTrue($reloaded->isEmailVerified());
+        self::assertNotNull(static::getEM()->getRepository(AuditRecord::class)->findOneBy([
+            'type' => AuditLogEventType::UserVerified,
+            'userId' => $alice->getId(),
+        ]));
+    }
+
+    public function testAnInvitationSentToAnotherAddressDoesNotConfirmTheAccountAddress(): void
+    {
+        [$owner, $organization, $backend] = $this->orgWithTeam();
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
+        $bob = self::createUser('bob', 'bob@example.org', emailVerified: false);
+        $this->store($bob);
+
+        $this->client->loginUser($owner);
+        $this->submitInvite($backend, 'alice@example.org');
+        $path = $this->acceptUrlPath();
+
+        // Holding alice's link says nothing about bob@example.org.
+        $this->client->loginUser($bob);
+        $crawler = $this->client->request('GET', $path);
+        self::assertStringContainsString('Use a confirmed account email address on example.org', $crawler->filter('.alert-warning')->text());
+
+        $this->client->submit($crawler->selectButton('Accept invitation')->form());
+        self::assertFalse(
+            static::getService(OrganizationTeamMemberRepository::class)->isMemberOfOrg($organization->id, $bob->getId()),
+        );
+        $reloaded = static::getEM()->getRepository(User::class)->find($bob->getId());
+        self::assertNotNull($reloaded);
+        self::assertFalse($reloaded->isEmailVerified());
+    }
+
+    public function testARefusedAcceptDoesNotConfirmTheAddress(): void
+    {
+        [$owner, $organization, $backend] = $this->orgWithTeam();
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, true, new AllowedEmailDomains('example.org'), null);
+        // No TOTP secret, so the 2FA policy refuses her whatever her address.
+        $alice = self::createUser('alice', 'alice@example.org', emailVerified: false);
+        $this->store($alice);
+
+        $this->client->loginUser($owner);
+        $this->submitInvite($backend, 'alice@example.org');
+        $path = $this->acceptUrlPath();
+
+        $this->client->loginUser($alice);
+        $crawler = $this->client->request('GET', $path);
+        $this->client->submit($crawler->selectButton('Accept invitation')->form());
+
+        // Confirmed together with the join, so a refused accept leaves the address as it was.
+        $reloaded = static::getEM()->getRepository(User::class)->find($alice->getId());
+        self::assertNotNull($reloaded);
+        self::assertFalse($reloaded->isEmailVerified());
+        self::assertSame(InvitationStatus::Pending, $this->pendingInvitation($organization)->status);
     }
 
     public function testInviteeDeclinesThroughLink(): void

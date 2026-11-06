@@ -69,6 +69,7 @@ class EmailVerifier
         $emailToVerify = $user->getEmail();
         $this->verifyEmailHelper->validateEmailConfirmationFromRequest($request, (string) $user->getId(), $emailToVerify);
         $user->setEnabled(true);
+        $user->markEmailVerified(new \DateTimeImmutable());
 
         $this->getEM()->persist(AuditRecord::userVerified($user, $user, $emailToVerify));
         $this->getEM()->persist($user);

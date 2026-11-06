@@ -20,6 +20,14 @@
                 {{ form_widget(form.email) }}
             </div>
             {{ form_errors(form.email) }}
+            {% if app.user.emailVerified %}
+                <small class="text-success email-confirmation-status">Confirmed</small>
+            {% else %}
+                <small class="text-danger email-confirmation-status">
+                    Not confirmed.
+                    <button type="submit" form="send-email-confirmation" class="btn btn-link btn-sm p-0 align-baseline">Send a confirmation link</button>
+                </small>
+            {% endif %}
         </div>
 
         {% if not app.user.githubId %}
@@ -63,6 +71,12 @@
             {% endif %}
         {% endif %}
     {{ form_end(form) }}
+
+    {% if not app.user.emailVerified %}
+        <form id="send-email-confirmation" method="post" action="{{ path('profile_send_email_confirmation') }}">
+            <input type="hidden" name="token" value="{{ csrf_token('send_email_confirmation') }}">
+        </form>
+    {% endif %}
 
     <div class="col-lg-2">
     </div>

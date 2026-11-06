@@ -47,9 +47,11 @@ class EmailVerifierTest extends IntegrationTestCase
         );
 
         $request = Request::create($signatureComponents->getSignedUrl());
+        $this->assertFalse($user->isEmailVerified());
         $this->emailVerifier->handleEmailConfirmation($request, $user);
 
         $this->assertTrue($user->isEnabled());
+        $this->assertTrue($user->isEmailVerified());
 
         $em = self::getEM();
         $record = $em->getRepository(AuditRecord::class)->findOneBy(['type' => AuditLogEventType::UserVerified, 'userId' => $user->getId()]);

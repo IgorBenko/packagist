@@ -12,6 +12,7 @@
 
 namespace App\Organization;
 
+use App\Entity\AuditRecord;
 use App\Entity\Organization as OrganizationReadModel;
 use App\Entity\OrganizationInvitation;
 use App\Entity\OrganizationInvitationRepository;
@@ -31,10 +32,11 @@ use App\Organization\Domain\Organization;
 use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\ConcurrencyException;
 use App\Organization\EventStore\EventStore;
+use App\Util\DoctrineTrait;
 use Doctrine\DBAL\Connection;
+use Doctrine\Persistence\ManagerRegistry;
 use Psr\Clock\ClockInterface;
 use Symfony\Bridge\Twig\Mime\TemplatedEmail;
-use Symfony\Bundle\SecurityBundle\Security;
 use Symfony\Component\Mailer\MailerInterface;
 use Symfony\Component\Mime\Address;
 use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
@@ -48,6 +50,8 @@ use Symfony\Component\Uid\Ulid;
  */
 final class InvitationManager
 {
+    use DoctrineTrait;
+
     /** Days an organization invitation link stays valid before it lazily expires. */
     public const int INVITATION_EXPIRY_DAYS = 7;
 
@@ -61,7 +65,9 @@ final class InvitationManager
         private readonly MailerInterface $mailer,
         private readonly UrlGeneratorInterface $urlGenerator,
         private readonly ClockInterface $clock,
-        private readonly Security $security,
+        private readonly MemberPolicyFactsResolver $policyFacts,
+        private readonly OrganizationActorResolver $actorResolver,
+        private readonly ManagerRegistry $doctrine,
         private readonly string $mailFromEmail,
         private readonly string $mailFromName,
     ) {
@@ -144,8 +150,13 @@ final class InvitationManager
 
     /**
      * The invitee accepts. Resolves the still-existing target teams, enforces the invitation invariants
-     * (2FA for owners) and adds the org membership, all in one transaction. The caller has already
+     * (the org's policies) and adds the org membership, all in one transaction. The caller has already
      * validated the link token.
+     *
+     * The link was emailed to the invited address, so using it proves control of that address. When it is
+     * the address on the invitee's account, accepting confirms it, which is what lets an unconfirmed address
+     * satisfy an allowed email domains policy here. It is confirmed only once the policies pass, in the same
+     * transaction as the join.
      *
      * @throws AlreadyMemberException
      * @throws PolicyNotMetException
@@ -167,11 +178,22 @@ final class InvitationManager
             $user->getId(),
             $organization->isOrgMember($user->getId()),
             $acceptedTeamIds,
-            $ownersAmongTeams,
-            $user->hasSecondFactorAuthenticationEnabled(),
+            // Ownership comes from the teams they are about to join, not from a membership they do not have
+            // yet.
+            $organization->policies()->remediationsFor(
+                $organization->policies()->unmetBy(
+                    $this->policyFacts->forInvitee($user, $invitation)->withOwnership($ownersAmongTeams),
+                ),
+            ),
             $now,
         );
         $organization->joinViaInvitation($user->getId(), $acceptedTeamIds, $invitation->id);
+
+        if (!$user->isEmailVerified() && $invitation->wasSentTo($user)) {
+            $user->markEmailVerified($now);
+            // Flushed by the append below, inside its transaction.
+            $this->getEM()->persist(AuditRecord::userVerified($user, $user, $user->getEmail()));
+        }
 
         $this->eventStore->appendAll([$aggregate, $organization], Actor::member($user), $ip);
     }
@@ -260,20 +282,15 @@ final class InvitationManager
     }
 
     /**
-     * An owner acts as a plain member; a platform moderator who is not an owner acts as `packagist-admin`.
-     * Mirrors {@see OrganizationMembershipManager::actorFor()}.
+     * Ownership comes from the team-member read model here: the invitation flow does not reconstitute the
+     * org aggregate for sending, resending or revoking.
      */
     private function ownerActor(User $actor, OrganizationReadModel $organization): Actor
     {
-        if ($this->organizationTeamMemberRepo->isOwner($organization->ownersTeamId, $actor->getId())) {
-            return Actor::member($actor);
-        }
-
-        if ($this->security->isGranted('ROLE_ADMIN_ORGS')) {
-            return Actor::packagistAdmin($actor);
-        }
-
-        return Actor::member($actor);
+        return $this->actorResolver->resolveFor(
+            $this->organizationTeamMemberRepo->isOwner($organization->ownersTeamId, $actor->getId()),
+            $actor,
+        );
     }
 
     private function sendInvitationEmail(OrganizationReadModel $organization, Email $email, Ulid $invitationId, string $rawToken, \DateTimeImmutable $expiresAt): void
