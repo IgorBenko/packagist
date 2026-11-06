@@ -96,7 +96,7 @@ final readonly class AllowedEmailDomains
         return $this->domains === [];
     }
 
-    /** Null (no address on record) never matches: an active policy refuses rather than waving someone through. */
+    /** Null (no confirmed address) never matches: an active policy refuses rather than waving someone through. */
     public function matches(?string $emailDomain): bool
     {
         return $emailDomain !== null && \in_array(mb_strtolower($emailDomain), $this->domains, true);

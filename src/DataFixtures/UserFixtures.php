@@ -35,6 +35,7 @@ class UserFixtures extends Fixture implements FixtureGroupInterface
         $dev->setUsername('admin');
         $dev->setPassword($this->passwordHasher->hashPassword($dev, 'admin'));
         $dev->setEnabled(true);
+        $dev->markEmailVerified(new \DateTimeImmutable());
         $dev->setRoles(['ROLE_SUPERADMIN']);
 
         $manager->persist($dev);
@@ -44,6 +45,7 @@ class UserFixtures extends Fixture implements FixtureGroupInterface
         $dev->setUsername('dev');
         $dev->setPassword($this->passwordHasher->hashPassword($dev, 'dev'));
         $dev->setEnabled(true);
+        $dev->markEmailVerified(new \DateTimeImmutable());
         $dev->setRoles([]);
 
         $manager->persist($dev);
@@ -53,6 +55,7 @@ class UserFixtures extends Fixture implements FixtureGroupInterface
         $user->setUsername('user');
         $user->setPassword($this->passwordHasher->hashPassword($user, 'user'));
         $user->setEnabled(true);
+        $user->markEmailVerified(new \DateTimeImmutable());
         $user->setRoles([]);
 
         $manager->persist($user);

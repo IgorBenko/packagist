@@ -25,6 +25,7 @@ use App\Entity\OrganizationTeamRepository;
 use App\Entity\User;
 use App\Log\AuditLogEventType;
 use App\Organization\Domain\AllowedEmailDomains;
+use App\Organization\Domain\Exception\EmailDomainMismatchException;
 use App\Organization\Domain\Organization as OrganizationAggregate;
 use App\Organization\Domain\OrganizationTeamKind;
 use App\Organization\Domain\PolicyComplianceReason;
@@ -35,6 +36,7 @@ use App\Organization\OrganizationManager;
 use App\Organization\OrganizationMembershipManager;
 use App\Organization\OrganizationPolicyManager;
 use App\Tests\IntegrationTestCase;
+use Symfony\Component\Mime\Email;
 use Symfony\Component\Uid\Ulid;
 
 class OrganizationControllerTest extends IntegrationTestCase
@@ -374,7 +376,7 @@ class OrganizationControllerTest extends IntegrationTestCase
 
         // A missing second factor names its own remedy, so they go to 2FA setup rather than to the
         // generic suspended banner.
-        self::assertResponseRedirects('/users/owner/2fa/');
+        self::assertResponseRedirects('/profile/security/authenticator');
     }
 
     public function testSuspendedMemberIsAnsweredWithTheNoticeInPlaceOfThePageTheyAskedFor(): void
@@ -397,7 +399,7 @@ class OrganizationControllerTest extends IntegrationTestCase
         $crawler = $this->client->request('GET', '/organizations/acme');
         self::assertResponseStatusCodeSame(403);
         self::assertStringContainsString('Your access to this organization is suspended', $crawler->filter('.alert')->text());
-        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.policy-remediations')->text());
+        self::assertStringContainsString('Use a confirmed account email address on example.org', $crawler->filter('.policy-remediations')->text());
 
         // Leaving survives, so they are never trapped, and the notice offers it directly.
         self::assertCount(1, $crawler->filter('a[href="/organizations/acme/members/leave"]'));
@@ -427,7 +429,7 @@ class OrganizationControllerTest extends IntegrationTestCase
         // they owe instead of getting a 404 for a team that plainly exists.
         self::assertResponseStatusCodeSame(403);
         self::assertStringContainsString('Your access to this organization is suspended', $crawler->filter('.alert')->text());
-        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.policy-remediations')->text());
+        self::assertStringContainsString('Use a confirmed account email address on example.org', $crawler->filter('.policy-remediations')->text());
     }
 
     public function testTheNoticeClearsItselfOnceTheMemberComplies(): void
@@ -460,6 +462,52 @@ class OrganizationControllerTest extends IntegrationTestCase
         self::assertSame(0, $members->countSuspended($organization->id));
     }
 
+    public function testAnUnconfirmedAddressOnAnAllowedDomainDoesNotLiftASuspension(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $member = self::createUser('member', 'member@other.org');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
+
+        // The profile saves any address at once, so typing one on the allowed domain must not be enough.
+        $this->client->loginUser($member);
+        $crawler = $this->client->request('GET', '/profile/edit');
+        $this->client->submit($crawler->selectButton('Update')->form(), [
+            'packagist_user_profile[email]' => 'member@example.org',
+        ]);
+        $link = $this->confirmationLink('member@example.org');
+
+        $crawler = $this->client->request('GET', '/organizations/acme');
+        self::assertResponseStatusCodeSame(403);
+        self::assertStringContainsString('Use a confirmed account email address on example.org', $crawler->filter('.policy-remediations')->text());
+
+        // Following the link proves the address, which is what lifts the suspension.
+        $this->client->request('GET', $link);
+        $this->client->request('GET', '/organizations/acme');
+        self::assertResponseIsSuccessful();
+        self::assertSame(0, static::getService(OrganizationMemberRepository::class)->countSuspended($organization->id));
+    }
+
+    public function testAnUnconfirmedOwnerAddressBlocksADomainRequirement(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org', emailVerified: false);
+        $owner->setTotpSecret('totp-secret');
+        $this->store($owner);
+
+        static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);
+        $organization = $this->organizations()->findOneBySlug('acme');
+        self::assertNotNull($organization);
+
+        $this->expectException(EmailDomainMismatchException::class);
+        $this->expectExceptionMessage('must be confirmed and on one of the domains you require');
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
+    }
+
     public function testAMemberFailingSeveralPoliciesGetsTheNoticeListingAllOfThem(): void
     {
         $owner = self::createUser('owner', 'owner@example.org');
@@ -478,7 +526,7 @@ class OrganizationControllerTest extends IntegrationTestCase
         // So the notice is rendered in place of the members page.
         self::assertResponseStatusCodeSame(403);
         self::assertStringContainsString('Enable two-factor authentication', $crawler->filter('.policy-remediations')->text());
-        self::assertStringContainsString('Use an account email address on example.org', $crawler->filter('.policy-remediations')->text());
+        self::assertStringContainsString('Use a confirmed account email address on example.org', $crawler->filter('.policy-remediations')->text());
     }
 
     public function testMembersListLabelsSuspendedMembersForOwners(): void
@@ -1244,6 +1292,21 @@ class OrganizationControllerTest extends IntegrationTestCase
      * Bootstraps an organization through the event store with a second, plain member, joined the way the
      * invitation flow would.
      */
+    private function confirmationLink(string $address): string
+    {
+        foreach ($this->getMailerMessages() as $mail) {
+            if (!$mail instanceof Email || $mail->getSubject() !== 'Please confirm your email' || $mail->getTo()[0]->getAddress() !== $address) {
+                continue;
+            }
+
+            self::assertSame(1, preg_match('{/profile/email/confirm\?\S+}', $mail->getTextBody() ?? '', $match), 'The mail carries a confirmation link');
+
+            return $match[0];
+        }
+
+        self::fail('No confirmation link was sent to '.$address);
+    }
+
     private function organizationWithMember(User $owner, User $member): Organization
     {
         static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);

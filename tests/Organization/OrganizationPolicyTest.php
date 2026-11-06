@@ -351,7 +351,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         // Both remediations are offered together, the domain one naming the domain.
         $remediations = $this->policies()->policiesFor($organization->id)->remediationsFor($unmet);
         self::assertSame(
-            ['Enable two-factor authentication on your account.', 'Use an account email address on example.org.'],
+            ['Enable two-factor authentication on your account.', 'Use a confirmed account email address on example.org.'],
             array_map(static fn (PolicyRemediation $remediation): string => $remediation->text, $remediations),
         );
 
@@ -578,6 +578,7 @@ class OrganizationPolicyTest extends IntegrationTestCase
         $user->setUsernameCanonical($username);
         $user->setEmail($email);
         $user->setEmailCanonical($email);
+        $user->markEmailVerified(new \DateTimeImmutable());
         $user->setPassword('testtest');
         if ($withTwoFactor) {
             $user->setTotpSecret('totp-secret');

@@ -64,7 +64,7 @@ class OrganizationInvitationController extends Controller
             // Resolved the same way the accept itself resolves it, so the checklist matches what would
             // refuse them.
             'remediations' => $policies->remediationsFor(
-                $policies->unmetBy($this->policyFacts->forUser($user)->withOwnership($targetsOwners)),
+                $policies->unmetBy($this->policyFacts->forInvitee($user, $invitation)->withOwnership($targetsOwners)),
             ),
             'acceptForm' => $this->createForm(InvitationConfirmType::class)->createView(),
             'declineForm' => $this->createForm(InvitationConfirmType::class)->createView(),

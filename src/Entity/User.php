@@ -82,6 +82,14 @@ class User implements UserInterface, TwoFactorInterface, BackupCodeInterface, Eq
     private bool $enabled = false;
 
     /**
+     * When the address now in $email was confirmed, null until it is. Unlike `enabled`, which records that the
+     * address used at registration was confirmed, this is cleared whenever the address changes, so a policy
+     * keyed on the email (an organization's allowed domains) only accepts an address the user proved they own.
+     */
+    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
+    private ?\DateTimeImmutable $emailVerifiedAt = null;
+
+    /**
      * Admin-controlled account freeze, independent of the email-confirmation `enabled` flag.
      * If set, the value is the reason the account was frozen; null means not frozen. A frozen
      * account cannot log in, reset its password, authenticate via API token, or be used as a
@@ -523,9 +531,29 @@ class User implements UserInterface, TwoFactorInterface, BackupCodeInterface, Eq
         $this->setEmailCanonical($email);
     }
 
+    public function markEmailVerified(\DateTimeImmutable $verifiedAt): void
+    {
+        $this->emailVerifiedAt = $verifiedAt;
+    }
+
+    public function isEmailVerified(): bool
+    {
+        return $this->emailVerifiedAt !== null;
+    }
+
+    public function getEmailVerifiedAt(): ?\DateTimeImmutable
+    {
+        return $this->emailVerifiedAt;
+    }
+
     public function setEmailCanonical(string $emailCanonical): void
     {
-        $this->emailCanonical = mb_strtolower($emailCanonical);
+        $emailCanonical = mb_strtolower($emailCanonical);
+        if (!isset($this->emailCanonical) || $this->emailCanonical !== $emailCanonical) {
+            $this->emailVerifiedAt = null;
+        }
+
+        $this->emailCanonical = $emailCanonical;
     }
 
     public function setEnabled(bool $boolean): void

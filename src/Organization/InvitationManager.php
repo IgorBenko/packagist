@@ -12,6 +12,7 @@
 
 namespace App\Organization;
 
+use App\Entity\AuditRecord;
 use App\Entity\Organization as OrganizationReadModel;
 use App\Entity\OrganizationInvitation;
 use App\Entity\OrganizationInvitationRepository;
@@ -31,7 +32,9 @@ use App\Organization\Domain\Organization;
 use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\ConcurrencyException;
 use App\Organization\EventStore\EventStore;
+use App\Util\DoctrineTrait;
 use Doctrine\DBAL\Connection;
+use Doctrine\Persistence\ManagerRegistry;
 use Psr\Clock\ClockInterface;
 use Symfony\Bridge\Twig\Mime\TemplatedEmail;
 use Symfony\Component\Mailer\MailerInterface;
@@ -47,6 +50,8 @@ use Symfony\Component\Uid\Ulid;
  */
 final class InvitationManager
 {
+    use DoctrineTrait;
+
     /** Days an organization invitation link stays valid before it lazily expires. */
     public const int INVITATION_EXPIRY_DAYS = 7;
 
@@ -62,6 +67,7 @@ final class InvitationManager
         private readonly ClockInterface $clock,
         private readonly MemberPolicyFactsResolver $policyFacts,
         private readonly OrganizationActorResolver $actorResolver,
+        private readonly ManagerRegistry $doctrine,
         private readonly string $mailFromEmail,
         private readonly string $mailFromName,
     ) {
@@ -144,8 +150,13 @@ final class InvitationManager
 
     /**
      * The invitee accepts. Resolves the still-existing target teams, enforces the invitation invariants
-     * (2FA for owners) and adds the org membership, all in one transaction. The caller has already
+     * (the org's policies) and adds the org membership, all in one transaction. The caller has already
      * validated the link token.
+     *
+     * The link was emailed to the invited address, so using it proves control of that address. When it is
+     * the address on the invitee's account, accepting confirms it, which is what lets an unconfirmed address
+     * satisfy an allowed email domains policy here. It is confirmed only once the policies pass, in the same
+     * transaction as the join.
      *
      * @throws AlreadyMemberException
      * @throws PolicyNotMetException
@@ -171,12 +182,18 @@ final class InvitationManager
             // yet.
             $organization->policies()->remediationsFor(
                 $organization->policies()->unmetBy(
-                    $this->policyFacts->forUser($user)->withOwnership($ownersAmongTeams),
+                    $this->policyFacts->forInvitee($user, $invitation)->withOwnership($ownersAmongTeams),
                 ),
             ),
             $now,
         );
         $organization->joinViaInvitation($user->getId(), $acceptedTeamIds, $invitation->id);
+
+        if (!$user->isEmailVerified() && $invitation->wasSentTo($user)) {
+            $user->markEmailVerified($now);
+            // Flushed by the append below, inside its transaction.
+            $this->getEM()->persist(AuditRecord::userVerified($user, $user, $user->getEmail()));
+        }
 
         $this->eventStore->appendAll([$aggregate, $organization], Actor::member($user), $ip);
     }

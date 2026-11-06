@@ -90,13 +90,13 @@ final readonly class OrganizationPolicies
         // No domains configured means a member is still suspended for a policy since cleared, which their
         // next request repairs.
         if ($this->allowedEmailDomains->isEmpty()) {
-            return 'Use an account email address on a domain this organization allows.';
+            return 'Use a confirmed account email address on a domain this organization allows.';
         }
 
         if (\count($this->allowedEmailDomains->domains) === 1) {
-            return sprintf('Use an account email address on %s.', $this->allowedEmailDomains->domains[0]);
+            return sprintf('Use a confirmed account email address on %s.', $this->allowedEmailDomains->domains[0]);
         }
 
-        return sprintf('Use an account email address on one of: %s.', implode(', ', $this->allowedEmailDomains->domains));
+        return sprintf('Use a confirmed account email address on one of: %s.', implode(', ', $this->allowedEmailDomains->domains));
     }
 }

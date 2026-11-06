@@ -191,7 +191,7 @@ final class Organization extends AbstractAggregate
         // Ownership comes from the aggregate, never the passed facts. Checked first so the common case, an
         // owner excluding themselves, is told so directly rather than through the list below.
         if ($this->isOwner($actorFacts->userId) && !$domains->matches($actorFacts->emailDomain)) {
-            throw new EmailDomainMismatchException('Your own account email address must be on one of the domains you require, otherwise saving this would suspend you from your own organization.');
+            throw new EmailDomainMismatchException('Your own account email address must be confirmed and on one of the domains you require, otherwise saving this would suspend you from your own organization.');
         }
 
         $uncovered = [];
@@ -203,7 +203,7 @@ final class Organization extends AbstractAggregate
 
             $emailDomain = $memberFacts[$userId]->emailDomain;
             if (!$domains->matches($emailDomain)) {
-                $uncovered[$emailDomain ?? '(no address on record)'] = true;
+                $uncovered[$emailDomain ?? '(no confirmed address)'] = true;
             }
         }
 

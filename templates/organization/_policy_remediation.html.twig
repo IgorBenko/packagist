@@ -6,8 +6,8 @@
 <li>
     {{ remediation.text }}
     {% if remediation.reason.value == 'two_factor' and app.user %}
-        <a href="{{ path('user_2fa_configure', { name: app.user.username }) }}">Set up two-factor authentication</a>
+        <a href="{{ path('security_authenticator') }}">Set up two-factor authentication</a>
     {% elseif remediation.reason.value == 'email_domain' and app.user %}
-        <a href="{{ path('edit_profile') }}">Change your account email address</a>
+        <a href="{{ path('edit_profile') }}">Change or confirm your account email address</a>
     {% endif %}
 </li>

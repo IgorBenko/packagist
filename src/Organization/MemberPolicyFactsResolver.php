@@ -12,6 +12,7 @@
 
 namespace App\Organization;
 
+use App\Entity\OrganizationInvitation;
 use App\Entity\User;
 use App\Entity\UserRepository;
 use App\Organization\Domain\MemberPolicyFacts;
@@ -30,10 +31,26 @@ final readonly class MemberPolicyFactsResolver
 
     public function forUser(User $user): MemberPolicyFacts
     {
+        return $this->facts($user, $user->isEmailVerified());
+    }
+
+    /**
+     * For someone holding a valid invitation link: accepting it confirms their address when the invitation
+     * was sent to it (see {@see InvitationManager::accept()}), so the policies are judged as if it already were.
+     */
+    public function forInvitee(User $user, OrganizationInvitation $invitation): MemberPolicyFacts
+    {
+        return $this->facts($user, $user->isEmailVerified() || $invitation->wasSentTo($user));
+    }
+
+    private function facts(User $user, bool $emailConfirmed): MemberPolicyFacts
+    {
         return new MemberPolicyFacts(
             $user->getId(),
-            $user->isTotpAuthenticationEnabled(),
-            emailDomain: self::emailDomain($user->getEmailCanonical()),
+            $user->hasSecondFactorAuthenticationEnabled(),
+            // The profile saves a new address before it is confirmed, so an unconfirmed one would let anyone
+            // type their way onto an allowed domain.
+            emailDomain: $emailConfirmed ? self::emailDomain($user->getEmailCanonical()) : null,
         );
     }
 

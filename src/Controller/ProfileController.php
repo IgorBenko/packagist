@@ -27,17 +27,21 @@ use App\Form\Type\ProfileFormType;
 use App\Form\Type\UnfreezeType;
 use App\Model\DownloadManager;
 use App\Model\FavoriteManager;
+use App\Security\EmailVerifier;
 use App\Security\UserNotifier;
 use Pagerfanta\Doctrine\ORM\QueryAdapter;
 use Pagerfanta\Pagerfanta;
 use Psr\Log\LoggerInterface;
+use Symfony\Bridge\Twig\Mime\TemplatedEmail;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\Mime\Address;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
 use Symfony\Component\Security\Csrf\CsrfTokenManagerInterface;
 use Symfony\Component\Security\Http\Attribute\CurrentUser;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
+use SymfonyCasts\Bundle\VerifyEmail\Exception\VerifyEmailExceptionInterface;
 
 class ProfileController extends Controller
 {
@@ -198,7 +202,7 @@ class ProfileController extends Controller
     }
 
     #[Route(path: '/profile/edit', name: 'edit_profile')]
-    public function editAction(Request $request, UserNotifier $userNotifier): Response
+    public function editAction(Request $request, UserNotifier $userNotifier, EmailVerifier $emailVerifier, string $mailFromEmail, string $mailFromName): Response
     {
         $user = $this->getUser();
         if (!$user instanceof User) {
@@ -236,12 +240,73 @@ class ProfileController extends Controller
             $this->getEM()->persist($user);
             $this->getEM()->flush();
 
+            // A changed address loses its confirmation in User::setEmailCanonical().
+            if (!$user->isEmailVerified()) {
+                $this->sendEmailConfirmation($emailVerifier, $user, $mailFromEmail, $mailFromName);
+                $this->addFlash('warning', 'We sent a confirmation link to '.$user->getEmail().'. Organizations that require an email domain accept the address once you confirm it.');
+            }
+
             return $this->redirectToRoute('my_profile');
         }
 
         return $this->render('user/edit.html.twig', [
             'form' => $form,
         ]);
+    }
+
+    #[Route(path: '/profile/email/send-confirmation', name: 'profile_send_email_confirmation', methods: ['POST'])]
+    public function sendEmailConfirmationAction(Request $request, #[CurrentUser] User $user, EmailVerifier $emailVerifier, string $mailFromEmail, string $mailFromName): Response
+    {
+        if (!$this->isCsrfTokenValid('send_email_confirmation', $request->request->getString('token'))) {
+            $this->addFlash('error', 'Invalid form submission, please try again.');
+
+            return $this->redirectToRoute('edit_profile');
+        }
+
+        if ($user->isEmailVerified()) {
+            $this->addFlash('success', 'Your email address is already confirmed.');
+
+            return $this->redirectToRoute('edit_profile');
+        }
+
+        $this->sendEmailConfirmation($emailVerifier, $user, $mailFromEmail, $mailFromName);
+        $this->addFlash('success', 'We sent a confirmation link to '.$user->getEmail().'.');
+
+        return $this->redirectToRoute('edit_profile');
+    }
+
+    /**
+     * Target of the link sent above. The signature covers the user id and the address it was sent to, so a
+     * link stops working once the address changes, and only the account it was sent for can use it.
+     */
+    #[Route(path: '/profile/email/confirm', name: 'profile_confirm_email', methods: ['GET'])]
+    public function confirmEmailAction(Request $request, #[CurrentUser] User $user, EmailVerifier $emailVerifier): Response
+    {
+        try {
+            $emailVerifier->handleEmailConfirmation($request, $user);
+        } catch (VerifyEmailExceptionInterface $e) {
+            $this->addFlash('error', $e->getReason());
+
+            return $this->redirectToRoute('edit_profile');
+        }
+
+        $this->addFlash('success', 'Your email address '.$user->getEmail().' is confirmed.');
+
+        return $this->redirectToRoute('edit_profile');
+    }
+
+    private function sendEmailConfirmation(EmailVerifier $emailVerifier, User $user, string $mailFromEmail, string $mailFromName): void
+    {
+        $emailVerifier->sendEmailConfirmation(
+            'profile_confirm_email',
+            $user,
+            new TemplatedEmail()
+                ->from(new Address($mailFromEmail, $mailFromName))
+                ->to($user->getEmail())
+                ->subject('Please confirm your email')
+                ->htmlTemplate('registration/confirmation_email.html.twig')
+                ->textTemplate('registration/confirmation_email.txt.twig'),
+        );
     }
 
     #[Route(path: '/profile/token/rotate', name: 'rotate_token', methods: ['POST'])]
