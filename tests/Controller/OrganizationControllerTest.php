@@ -432,6 +432,34 @@ class OrganizationControllerTest extends IntegrationTestCase
         self::assertStringContainsString('Use a confirmed account email address on example.org', $crawler->filter('.policy-remediations')->text());
     }
 
+    public function testASuspendedOwnerCannotOpenOrSaveThePolicies(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $this->store($owner);
+
+        static::getService(OrganizationManager::class)->create($owner, $owner, 'acme', 'ACME Corp', null);
+        $organization = $this->organizations()->findOneBySlug('acme');
+        self::assertNotNull($organization);
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
+
+        $owner->setEmail('owner@other.org');
+        $owner->setEmailCanonical('owner@other.org');
+        static::getEM()->flush();
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/policies');
+        self::assertResponseStatusCodeSame(403);
+        self::assertStringContainsString('Your access to this organization is suspended', $crawler->filter('.alert')->text());
+
+        // An owner off the domain cannot clear the requirement that keeps them out.
+        $this->client->request('POST', '/organizations/acme/policies', ['organization_policy' => ['allowedEmailDomains' => '']]);
+        self::assertResponseStatusCodeSame(403);
+        $policies = static::getService(OrganizationPolicyRepository::class)->policiesFor($organization->id);
+        self::assertSame(['example.org'], $policies->allowedEmailDomains->domains);
+    }
+
     public function testTheNoticeClearsItselfOnceTheMemberComplies(): void
     {
         $owner = self::createUser('owner', 'owner@example.org');
@@ -1211,6 +1239,33 @@ class OrganizationControllerTest extends IntegrationTestCase
         // The sole owner cannot leave: the form re-renders with the domain error instead of redirecting.
         self::assertResponseIsSuccessful();
         self::assertStringContainsString('The last owner cannot leave or be removed from the organization.', $crawler->text());
+    }
+
+    public function testTheLastOwnerWhoMeetsThePoliciesCannotLeave(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $member = self::createUser('member', 'member@example.org');
+        $member->setTotpSecret('totp-secret');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        static::getService(OrganizationMembershipManager::class)->addTeamMember($organization, $owner, $organization->ownersTeamId, $member->getId(), null);
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
+
+        // The co-owner moves off the domain. They have not loaded an org page since, so no suspension is recorded.
+        $member->setEmail('member@other.org');
+        $member->setEmailCanonical('member@other.org');
+        static::getEM()->flush();
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/organizations/acme/members/leave');
+        $crawler = $this->client->submit($crawler->selectButton('Leave organization')->form());
+
+        self::assertResponseIsSuccessful();
+        self::assertStringContainsString('This is the only owner who meets the organization policies.', $crawler->text());
+        self::assertTrue(static::getService(OrganizationTeamMemberRepository::class)->isOwner($organization->ownersTeamId, $owner->getId()));
     }
 
     public function testShowRedirectsOldSlugToCurrentSlug(): void

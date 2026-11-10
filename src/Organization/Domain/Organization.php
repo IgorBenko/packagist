@@ -156,7 +156,8 @@ final class Organization extends AbstractAggregate
         }
 
         // Every guard runs before the first record(), which applies as it queues: an edit is all-or-nothing.
-        // Only a policy that changes is guarded, so an owner already out of compliance can still relax it.
+        // Only a policy that changes is guarded, so an owner who fell out of compliance later does not block
+        // edits to another policy. A suspended owner never gets here: the voter refuses them this page.
         if ($twoFactorChanged && $desired->enforceTwoFactor && !$actorFacts->hasTwoFactor) {
             throw new TwoFactorRequiredException('You must enable two-factor authentication on your own account before requiring it from the organization.');
         }
@@ -355,15 +356,16 @@ final class Organization extends AbstractAggregate
     /**
      * Remove a user from a single team.
      *
-     * @param MemberPolicyFacts|null $facts the user's facts, null when their user record is gone; leaving
-     *                                      `owners` drops the owner requirements, so they are re-verified
+     * @param array<int, MemberPolicyFacts> $ownerFacts userId => facts, for every current owner whose user
+     *                                                record still exists; leaving `owners` drops the owner
+     *                                                requirements, so the removed owner is re-verified
      *
      * @throws TeamNotFoundException
      * @throws TeamProtectedException      the `all organization members` team is managed automatically
      * @throws NotAMemberException         the user is not in the team
-     * @throws LastOwnerProtectedException would empty the `owners` team
+     * @throws LastOwnerProtectedException would empty the `owners` team, or leave no owner who meets the policies
      */
-    public function removeTeamMember(Ulid $teamId, int $userId, ?MemberPolicyFacts $facts): void
+    public function removeTeamMember(Ulid $teamId, int $userId, array $ownerFacts): void
     {
         $this->assertTeamExists($teamId);
         $this->assertNotAllMembersTeam($teamId);
@@ -377,10 +379,14 @@ final class Organization extends AbstractAggregate
             throw new LastOwnerProtectedException('The last owner cannot be removed from the organization.');
         }
 
+        if ($isOwnersTeam) {
+            $this->assertNotLastCompliantOwner($userId, $ownerFacts);
+        }
+
         $this->record(new TeamMemberRemoved($this->id, $teamId, $userId));
 
-        if ($isOwnersTeam && $facts !== null && $facts->userId === $userId) {
-            $this->verifyMemberCompliance($facts);
+        if ($isOwnersTeam && isset($ownerFacts[$userId])) {
+            $this->verifyMemberCompliance($ownerFacts[$userId]);
         }
     }
 
@@ -441,12 +447,14 @@ final class Organization extends AbstractAggregate
     /**
      * Remove a user from the entire org (all their teams at once).
      *
+     * @param array<int, MemberPolicyFacts> $ownerFacts userId => facts, for every current owner whose user record still exists
+     *
      * @throws NotAMemberException
      * @throws LastOwnerProtectedException
      */
-    public function removeMember(int $userId): void
+    public function removeMember(int $userId, array $ownerFacts): void
     {
-        $this->assertRemovableMember($userId);
+        $this->assertRemovableMember($userId, $ownerFacts);
 
         $this->record(new MemberRemoved($this->id, $userId));
     }
@@ -454,12 +462,14 @@ final class Organization extends AbstractAggregate
     /**
      * A member voluntarily leaves the org entirely (all teams).
      *
+     * @param array<int, MemberPolicyFacts> $ownerFacts userId => facts, for every current owner whose user record still exists
+     *
      * @throws NotAMemberException
-     * @throws LastOwnerProtectedException the last owner must appoint another owner first
+     * @throws LastOwnerProtectedException the last owner, or the last owner who meets the policies, must appoint another owner first
      */
-    public function leave(int $userId): void
+    public function leave(int $userId, array $ownerFacts): void
     {
-        $this->assertRemovableMember($userId);
+        $this->assertRemovableMember($userId, $ownerFacts);
 
         $this->record(new MemberLeft($this->id, $userId));
     }
@@ -511,6 +521,14 @@ final class Organization extends AbstractAggregate
     public function isOrgMember(int $userId): bool
     {
         return \in_array($userId, $this->members, true);
+    }
+
+    /**
+     * @return list<int> every current owner's user id, so the caller can resolve their policy facts
+     */
+    public function owners(): array
+    {
+        return $this->teamMembers[$this->ownersTeamId?->toRfc4122()] ?? [];
     }
 
     /**
@@ -588,15 +606,57 @@ final class Organization extends AbstractAggregate
         }
     }
 
-    private function assertRemovableMember(int $userId): void
+    /**
+     * @param array<int, MemberPolicyFacts> $ownerFacts
+     */
+    private function assertRemovableMember(int $userId, array $ownerFacts): void
     {
         if (!$this->isOrgMember($userId)) {
             throw new NotAMemberException('The user is not a member of this organization.');
         }
 
-        if ($this->ownersTeamId !== null && $this->isInTeam($this->ownersTeamId, $userId) && $this->ownerCount() === 1) {
+        if (!$this->isOwner($userId)) {
+            return;
+        }
+
+        if ($this->ownerCount() === 1) {
             throw new LastOwnerProtectedException('The last owner cannot leave or be removed from the organization.');
         }
+
+        $this->assertNotLastCompliantOwner($userId, $ownerFacts);
+    }
+
+    /**
+     * Suspended owners cannot use the org, the policies page included, so once the last owner who meets
+     * the policies goes, only a Packagist admin can recover it. Judged on fresh facts: an owner may have
+     * changed their email since their suspension state was last recorded.
+     *
+     * @param array<int, MemberPolicyFacts> $ownerFacts
+     */
+    private function assertNotLastCompliantOwner(int $userId, array $ownerFacts): void
+    {
+        if (!$this->meetsOwnerPolicies($userId, $ownerFacts)) {
+            return;
+        }
+
+        foreach ($this->owners() as $ownerId) {
+            if ($ownerId !== $userId && $this->meetsOwnerPolicies($ownerId, $ownerFacts)) {
+                return;
+            }
+        }
+
+        throw new LastOwnerProtectedException('This is the only owner who meets the organization policies. Another owner must meet them, or the policies must change, before this owner can leave or be removed.');
+    }
+
+    /**
+     * @param array<int, MemberPolicyFacts> $ownerFacts
+     */
+    private function meetsOwnerPolicies(int $userId, array $ownerFacts): bool
+    {
+        // A user record that has gone meets no requirement.
+        $facts = $ownerFacts[$userId] ?? null;
+
+        return $facts !== null && $this->policies->unmetBy($facts->withOwnership(true))->isEmpty();
     }
 
     protected function apply(DomainEvent $event): void

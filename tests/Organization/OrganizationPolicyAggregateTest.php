@@ -20,6 +20,7 @@ use App\Organization\Domain\Event\TeamMemberAdded;
 use App\Organization\Domain\Event\TeamMemberRemoved;
 use App\Organization\Domain\Event\TwoFactorEnforcementEdited;
 use App\Organization\Domain\Exception\EmailDomainMismatchException;
+use App\Organization\Domain\Exception\LastOwnerProtectedException;
 use App\Organization\Domain\Exception\PolicyNotMetException;
 use App\Organization\Domain\Exception\TwoFactorRequiredException;
 use App\Organization\Domain\MemberPolicyFacts;
@@ -28,6 +29,7 @@ use App\Organization\Domain\OrganizationPolicies;
 use App\Organization\Domain\PolicyComplianceReason;
 use App\Organization\Domain\TeamName;
 use App\Organization\EventStore\OrganizationEventType;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Uid\Ulid;
 
@@ -245,7 +247,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         ]);
         $organization->pullPendingEvents();
 
-        $organization->leave(self::MEMBER);
+        $organization->leave(self::MEMBER, []);
 
         // A former member carries no compliance state, so re-joining starts clean.
         self::assertTrue($organization->unmetPoliciesFor(self::MEMBER)->isEmpty());
@@ -481,7 +483,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         $organization->verifyMemberCompliance($facts);
         $organization->pullPendingEvents();
 
-        $organization->removeTeamMember($this->ownersTeamId($organization), self::MEMBER, $facts);
+        $organization->removeTeamMember($this->ownersTeamId($organization), self::MEMBER, [self::MEMBER => $facts]);
 
         // No org policy asks plain members for 2FA, so the demotion itself lifts the suspension.
         $events = $organization->pullPendingEvents();
@@ -499,7 +501,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         self::enforceTwoFactor($organization, true, [self::MEMBER => $facts]);
         $organization->pullPendingEvents();
 
-        $organization->removeTeamMember($this->ownersTeamId($organization), self::MEMBER, $facts);
+        $organization->removeTeamMember($this->ownersTeamId($organization), self::MEMBER, [self::MEMBER => $facts]);
 
         $events = $organization->pullPendingEvents();
         self::assertCount(1, $events);
@@ -514,7 +516,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         $organization->pullPendingEvents();
 
         // The user record is gone, so there is nothing to judge them by.
-        $organization->removeTeamMember($this->ownersTeamId($organization), self::MEMBER, null);
+        $organization->removeTeamMember($this->ownersTeamId($organization), self::MEMBER, []);
 
         $events = $organization->pullPendingEvents();
         self::assertCount(1, $events);
@@ -532,13 +534,107 @@ class OrganizationPolicyAggregateTest extends TestCase
         // Facts that would restore them: a custom team carries no requirement, so nothing is re-judged.
         $compliant = new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'example.org');
         $organization->addTeamMember($teamId, $compliant);
-        $organization->removeTeamMember($teamId, self::MEMBER, $compliant);
+        $organization->removeTeamMember($teamId, self::MEMBER, [self::MEMBER => $compliant]);
 
         $events = $organization->pullPendingEvents();
         self::assertCount(2, $events);
         self::assertInstanceOf(TeamMemberAdded::class, $events[0]);
         self::assertInstanceOf(TeamMemberRemoved::class, $events[1]);
         self::assertSame([PolicyComplianceReason::EmailDomain], $organization->unmetPoliciesFor(self::MEMBER)->reasons);
+    }
+
+    /**
+     * @return iterable<string, array{\Closure(Organization, array<int, MemberPolicyFacts>): void}>
+     */
+    public static function ownerDepartures(): iterable
+    {
+        yield 'leave' => [static fn (Organization $org, array $facts) => $org->leave(self::OWNER, $facts)];
+        yield 'remove from the org' => [static fn (Organization $org, array $facts) => $org->removeMember(self::OWNER, $facts)];
+        yield 'remove from owners' => [static fn (Organization $org, array $facts) => $org->removeTeamMember(self::ownersTeamId($org), self::OWNER, $facts)];
+    }
+
+    /**
+     * @param \Closure(Organization, array<int, MemberPolicyFacts>): void $depart
+     */
+    #[DataProvider('ownerDepartures')]
+    public function testTheLastOwnerWhoMeetsThePoliciesCannotGo(\Closure $depart): void
+    {
+        $organization = $this->orgWithTwoOwnersOnExampleOrg();
+
+        // The co-owner moved off the domain but has not loaded an org page since, so no suspension is
+        // recorded yet: the guard judges the fresh facts, not the stored state.
+        $this->expectException(LastOwnerProtectedException::class);
+        $depart($organization, [
+            self::OWNER => self::actor(),
+            self::MEMBER => new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'gmail.com'),
+        ]);
+    }
+
+    public function testAnOwnerWhoseUserRecordIsGoneDoesNotCountAsMeetingThePolicies(): void
+    {
+        $organization = $this->orgWithTwoOwnersOnExampleOrg();
+
+        $this->expectException(LastOwnerProtectedException::class);
+        $organization->leave(self::OWNER, [self::OWNER => self::actor()]);
+    }
+
+    /**
+     * @param \Closure(Organization, array<int, MemberPolicyFacts>): void $depart
+     */
+    #[DataProvider('ownerDepartures')]
+    public function testAnOwnerMayGoWhileAnotherOwnerMeetsThePolicies(\Closure $depart): void
+    {
+        $organization = $this->orgWithTwoOwnersOnExampleOrg();
+
+        $depart($organization, [
+            self::OWNER => self::actor(),
+            self::MEMBER => new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'example.org'),
+        ]);
+
+        self::assertFalse($organization->isOwner(self::OWNER));
+    }
+
+    public function testAnOwnerWhoFailsThePoliciesMayStillGo(): void
+    {
+        $organization = $this->orgWithTwoOwnersOnExampleOrg();
+
+        // The guard protects the last owner who can act; one who cannot is never kept in.
+        $organization->leave(self::MEMBER, [
+            self::OWNER => self::actor(),
+            self::MEMBER => new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'gmail.com'),
+        ]);
+
+        self::assertFalse($organization->isOrgMember(self::MEMBER));
+    }
+
+    public function testOwnersMayGoWhenNoneOfThemMeetsThePolicies(): void
+    {
+        $organization = $this->orgWithTwoOwnersOnExampleOrg();
+
+        // Nobody left can act either way, so the guard has nothing to protect.
+        $organization->leave(self::OWNER, [
+            self::OWNER => new MemberPolicyFacts(self::OWNER, true, emailDomain: 'gmail.com'),
+            self::MEMBER => new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'gmail.com'),
+        ]);
+
+        self::assertFalse($organization->isOrgMember(self::OWNER));
+    }
+
+    /** Two owners, both on example.org with 2FA, and example.org required. */
+    private function orgWithTwoOwnersOnExampleOrg(): Organization
+    {
+        $organization = $this->orgWithSecondOwner();
+        $organization->setPolicies(
+            $organization->policies()->withAllowedEmailDomains(new AllowedEmailDomains('example.org')),
+            self::actor(),
+            [
+                self::OWNER => self::actor(),
+                self::MEMBER => new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'example.org'),
+            ],
+        );
+        $organization->pullPendingEvents();
+
+        return $organization;
     }
 
     /**
@@ -557,7 +653,7 @@ class OrganizationPolicyAggregateTest extends TestCase
         $organization->pullPendingEvents();
     }
 
-    private function ownersTeamId(Organization $organization): Ulid
+    private static function ownersTeamId(Organization $organization): Ulid
     {
         $ownersTeamId = $organization->ownersTeamId();
         self::assertNotNull($ownersTeamId);

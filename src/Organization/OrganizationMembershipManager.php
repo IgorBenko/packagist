@@ -78,14 +78,12 @@ final class OrganizationMembershipManager
 
     public function removeTeamMember(OrganizationReadModel $organization, User $actor, Ulid $teamId, int $userId, ?string $ip): void
     {
-        $facts = $this->factsFor($userId);
-
-        $this->mutate($organization, $actor, static fn (Organization $org) => $org->removeTeamMember($teamId, $userId, $facts), $ip);
+        $this->mutate($organization, $actor, fn (Organization $org) => $org->removeTeamMember($teamId, $userId, $this->ownerFacts($org)), $ip);
     }
 
     public function removeMember(OrganizationReadModel $organization, User $actor, int $userId, ?string $ip): void
     {
-        $this->mutate($organization, $actor, static fn (Organization $org) => $org->removeMember($userId), $ip);
+        $this->mutate($organization, $actor, fn (Organization $org) => $org->removeMember($userId, $this->ownerFacts($org)), $ip);
     }
 
     /**
@@ -93,7 +91,15 @@ final class OrganizationMembershipManager
      */
     public function leave(OrganizationReadModel $organization, User $actor, ?string $ip): void
     {
-        $this->mutate($organization, $actor, static fn (Organization $org) => $org->leave($actor->getId()), $ip);
+        $this->mutate($organization, $actor, fn (Organization $org) => $org->leave($actor->getId(), $this->ownerFacts($org)), $ip);
+    }
+
+    /**
+     * @return array<int, MemberPolicyFacts>
+     */
+    private function ownerFacts(Organization $organization): array
+    {
+        return $this->policyFacts->forUserIds($organization->owners());
     }
 
     private function factsFor(int $userId): ?MemberPolicyFacts
