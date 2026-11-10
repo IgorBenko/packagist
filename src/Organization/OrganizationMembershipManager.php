@@ -18,6 +18,7 @@ use App\Entity\UserRepository;
 use App\Organization\Domain\Exception\TeamNameTakenException;
 use App\Organization\Domain\Exception\TeamNotFoundException;
 use App\Organization\Domain\Exception\TeamProtectedException;
+use App\Organization\Domain\MemberPolicyFacts;
 use App\Organization\Domain\Organization;
 use App\Organization\Domain\TeamName;
 use App\Organization\EventStore\EventStore;
@@ -26,7 +27,7 @@ use Symfony\Component\Uid\Ulid;
 
 /**
  * Application service for team & member management. Follows the reconstitute → command → append
- * pattern of {@see OrganizationManager}: external facts (2FA, admin status) are resolved here, the
+ * pattern of {@see OrganizationManager}: external facts (policy facts, admin status) are resolved here, the
  * aggregate enforces the domain invariants, and the projection's unique constraint is the final
  * backstop for team-name uniqueness.
  */
@@ -36,6 +37,7 @@ final class OrganizationMembershipManager
         private readonly EventStore $eventStore,
         private readonly UserRepository $userRepo,
         private readonly OrganizationActorResolver $actorResolver,
+        private readonly MemberPolicyFactsResolver $policyFacts,
     ) {
     }
 
@@ -68,14 +70,17 @@ final class OrganizationMembershipManager
 
     public function addTeamMember(OrganizationReadModel $organization, User $actor, Ulid $teamId, int $userId, ?string $ip): void
     {
-        $targetHasTwoFactor = $this->userRepo->find($userId)?->hasSecondFactorAuthenticationEnabled() ?? false;
+        // A user record that has gone meets no requirement: it can still join a custom team, never `owners`.
+        $target = $this->factsFor($userId) ?? new MemberPolicyFacts($userId, false);
 
-        $this->mutate($organization, $actor, static fn (Organization $org) => $org->addTeamMember($teamId, $userId, $targetHasTwoFactor), $ip);
+        $this->mutate($organization, $actor, static fn (Organization $org) => $org->addTeamMember($teamId, $target), $ip);
     }
 
     public function removeTeamMember(OrganizationReadModel $organization, User $actor, Ulid $teamId, int $userId, ?string $ip): void
     {
-        $this->mutate($organization, $actor, static fn (Organization $org) => $org->removeTeamMember($teamId, $userId), $ip);
+        $facts = $this->factsFor($userId);
+
+        $this->mutate($organization, $actor, static fn (Organization $org) => $org->removeTeamMember($teamId, $userId, $facts), $ip);
     }
 
     public function removeMember(OrganizationReadModel $organization, User $actor, int $userId, ?string $ip): void
@@ -89,6 +94,13 @@ final class OrganizationMembershipManager
     public function leave(OrganizationReadModel $organization, User $actor, ?string $ip): void
     {
         $this->mutate($organization, $actor, static fn (Organization $org) => $org->leave($actor->getId()), $ip);
+    }
+
+    private function factsFor(int $userId): ?MemberPolicyFacts
+    {
+        $user = $this->userRepo->find($userId);
+
+        return $user !== null ? $this->policyFacts->forUser($user) : null;
     }
 
     /**

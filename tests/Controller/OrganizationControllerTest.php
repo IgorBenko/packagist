@@ -731,6 +731,56 @@ class OrganizationControllerTest extends IntegrationTestCase
         self::assertContains($owner->getId(), $userIds);
     }
 
+    public function testPromotingAnOffDomainMemberToOwnerRerendersWithError(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $member = self::createUser('member', 'member@other.org');
+        $member->setTotpSecret('totp-secret');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        static::getService(OrganizationPolicyManager::class)
+            ->setPolicies($organization, $owner, false, new AllowedEmailDomains('example.org'), null);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', \sprintf('/organizations/acme/teams/%s/members/add', $organization->ownersTeamId));
+        $form = $crawler->selectButton('Add member')->form(['add_team_member[username]' => 'member']);
+        $crawler = $this->client->submit($form);
+
+        self::assertResponseIsSuccessful();
+        self::assertStringContainsString('must have a confirmed account email address on one of the domains this organization requires', $crawler->text());
+        self::assertFalse(static::getService(OrganizationTeamMemberRepository::class)->isOwner($organization->ownersTeamId, $member->getId()));
+    }
+
+    public function testDemotingAnOwnerSuspendedForOwnerTwoFactorRestoresThemAtOnce(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org');
+        $owner->setTotpSecret('totp-secret');
+        $member = self::createUser('member', 'member@example.org');
+        $member->setTotpSecret('totp-secret');
+        $this->store($owner, $member);
+
+        $organization = $this->organizationWithMember($owner, $member);
+        static::getService(OrganizationMembershipManager::class)->addTeamMember($organization, $owner, $organization->ownersTeamId, $member->getId(), null);
+
+        // As an owner they need 2FA whatever the org enforces, so dropping it suspends them on their next visit.
+        $member->setTotpSecret(null);
+        static::getEM()->flush();
+        $this->client->loginUser($member);
+        $this->client->request('GET', '/organizations/acme');
+        $members = static::getService(OrganizationMemberRepository::class);
+        self::assertSame(1, $members->countSuspended($organization->id));
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', \sprintf('/organizations/acme/teams/%s/members/member/remove', $organization->ownersTeamId));
+        $this->client->submit($crawler->selectButton('Remove member')->form());
+        self::assertResponseRedirects('/organizations/acme/teams');
+
+        // Restored by the demotion itself, not left for the member's next request.
+        self::assertSame(0, $members->countSuspended($organization->id));
+    }
+
     public function testAddTeamMemberWithUnknownUserRerendersWithError(): void
     {
         $owner = self::createUser('owner', 'owner@example.org');

@@ -30,6 +30,8 @@ use App\Organization\Domain\Event\TwoFactorEnforcementEdited;
 use App\Organization\Domain\Exception\EmailDomainMismatchException;
 use App\Organization\Domain\Exception\LastOwnerProtectedException;
 use App\Organization\Domain\Exception\NotAMemberException;
+use App\Organization\Domain\Exception\OrganizationException;
+use App\Organization\Domain\Exception\PolicyNotMetException;
 use App\Organization\Domain\Exception\TeamNameTakenException;
 use App\Organization\Domain\Exception\TeamNotFoundException;
 use App\Organization\Domain\Exception\TeamProtectedException;
@@ -308,18 +310,24 @@ final class Organization extends AbstractAggregate
     /**
      * Add an existing org member to a further team. No-op if already in the team.
      *
-     * @param bool $targetHasTwoFactor whether the target user has 2FA enabled (checked by the caller)
+     * Becoming an owner requires meeting every policy as an owner. {@see setPolicies()} applies this rule to
+     * existing owners and invitation acceptance applies it to new ones.
+     *
+     * @param MemberPolicyFacts $target the user to add, with facts resolved by the caller
      *
      * @throws TeamNotFoundException
-     * @throws TeamProtectedException     the `all organization members` team is managed automatically
-     * @throws NotAMemberException        the target has not joined the org (joining is invitation-only)
-     * @throws TwoFactorRequiredException adding to `owners` requires the target to have 2FA
+     * @throws TeamProtectedException       the `all organization members` team is managed automatically
+     * @throws NotAMemberException          the target has not joined the org (joining is invitation-only)
+     * @throws TwoFactorRequiredException   adding to `owners` requires the target to have 2FA
+     * @throws EmailDomainMismatchException adding to `owners` requires an address on an allowed domain
+     * @throws PolicyNotMetException        adding to `owners` fails several requirements at once
      */
-    public function addTeamMember(Ulid $teamId, int $userId, bool $targetHasTwoFactor): void
+    public function addTeamMember(Ulid $teamId, MemberPolicyFacts $target): void
     {
         $this->assertTeamExists($teamId);
         $this->assertNotAllMembersTeam($teamId);
 
+        $userId = $target->userId;
         if (!$this->isOrgMember($userId)) {
             throw new NotAMemberException('The user is not a member of this organization.');
         }
@@ -328,22 +336,34 @@ final class Organization extends AbstractAggregate
             return;
         }
 
-        if ($teamId->equals($this->ownersTeamId) && !$targetHasTwoFactor) {
-            throw new TwoFactorRequiredException('The user must enable two-factor authentication before becoming an owner.');
+        if (!$teamId->equals($this->ownersTeamId)) {
+            $this->record(new TeamMemberAdded($this->id, $teamId, $userId));
+
+            return;
+        }
+
+        $unmet = $this->policies->unmetBy($target->withOwnership(true));
+        if (!$unmet->isEmpty()) {
+            throw self::ownerPromotionRefused($unmet);
         }
 
         $this->record(new TeamMemberAdded($this->id, $teamId, $userId));
+        // Clears a suspension they have since remedied without a request of their own re-verifying them.
+        $this->verifyMemberCompliance($target);
     }
 
     /**
      * Remove a user from a single team.
+     *
+     * @param MemberPolicyFacts|null $facts the user's facts, null when their user record is gone; leaving
+     *                                      `owners` drops the owner requirements, so they are re-verified
      *
      * @throws TeamNotFoundException
      * @throws TeamProtectedException      the `all organization members` team is managed automatically
      * @throws NotAMemberException         the user is not in the team
      * @throws LastOwnerProtectedException would empty the `owners` team
      */
-    public function removeTeamMember(Ulid $teamId, int $userId): void
+    public function removeTeamMember(Ulid $teamId, int $userId, ?MemberPolicyFacts $facts): void
     {
         $this->assertTeamExists($teamId);
         $this->assertNotAllMembersTeam($teamId);
@@ -352,11 +372,33 @@ final class Organization extends AbstractAggregate
             throw new NotAMemberException('The user is not a member of this team.');
         }
 
-        if ($teamId->equals($this->ownersTeamId) && $this->ownerCount() === 1) {
+        $isOwnersTeam = $teamId->equals($this->ownersTeamId);
+        if ($isOwnersTeam && $this->ownerCount() === 1) {
             throw new LastOwnerProtectedException('The last owner cannot be removed from the organization.');
         }
 
         $this->record(new TeamMemberRemoved($this->id, $teamId, $userId));
+
+        if ($isOwnersTeam && $facts !== null && $facts->userId === $userId) {
+            $this->verifyMemberCompliance($facts);
+        }
+    }
+
+    /**
+     * The error the owner sees when a promotion is refused. It does not show the user's email domain. Owners
+     * cannot see member email addresses, and only the user can fix their address, so the owner does not
+     * need to know it.
+     */
+    private static function ownerPromotionRefused(UnmetPolicies $unmet): OrganizationException
+    {
+        return match ($unmet->sole()) {
+            PolicyComplianceReason::TwoFactor => new TwoFactorRequiredException('The user must enable two-factor authentication before becoming an owner.'),
+            PolicyComplianceReason::EmailDomain => new EmailDomainMismatchException('The user must have a confirmed account email address on one of the domains this organization requires before becoming an owner.'),
+            null => new PolicyNotMetException(\sprintf(
+                'The user must meet every organization requirement before becoming an owner. Not met: %s.',
+                implode(', ', array_map(static fn (PolicyComplianceReason $reason): string => $reason->label(), $unmet->reasons)),
+            )),
+        };
     }
 
     /**

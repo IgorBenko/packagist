@@ -16,13 +16,17 @@ use App\Organization\Domain\AllowedEmailDomains;
 use App\Organization\Domain\Event\AllowedEmailDomainsEdited;
 use App\Organization\Domain\Event\MemberPolicyComplianceFailed;
 use App\Organization\Domain\Event\MemberPolicyComplianceRestored;
+use App\Organization\Domain\Event\TeamMemberAdded;
+use App\Organization\Domain\Event\TeamMemberRemoved;
 use App\Organization\Domain\Event\TwoFactorEnforcementEdited;
 use App\Organization\Domain\Exception\EmailDomainMismatchException;
+use App\Organization\Domain\Exception\PolicyNotMetException;
 use App\Organization\Domain\Exception\TwoFactorRequiredException;
 use App\Organization\Domain\MemberPolicyFacts;
 use App\Organization\Domain\Organization;
 use App\Organization\Domain\OrganizationPolicies;
 use App\Organization\Domain\PolicyComplianceReason;
+use App\Organization\Domain\TeamName;
 use App\Organization\EventStore\OrganizationEventType;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Uid\Ulid;
@@ -397,6 +401,168 @@ class OrganizationPolicyAggregateTest extends TestCase
         self::assertCount(1, $events);
         self::assertInstanceOf(AllowedEmailDomainsEdited::class, $events[0]);
         self::assertTrue($organization->policies()->enforceTwoFactor);
+    }
+
+    public function testPromotingAnOffDomainMemberToOwnerIsRefused(): void
+    {
+        $organization = $this->orgWithSecondMember();
+        self::requireExampleOrg($organization, new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'gmail.com'));
+
+        // The same rule setPolicies() holds every owner to, so promotion cannot route around it.
+        try {
+            $organization->addTeamMember($this->ownersTeamId($organization), new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'gmail.com'));
+            self::fail('Promoting an off-domain member to owner should have been refused.');
+        } catch (EmailDomainMismatchException $e) {
+            self::assertStringNotContainsString('gmail.com', $e->getMessage());
+        }
+
+        self::assertSame([], $organization->pullPendingEvents());
+        self::assertFalse($organization->isOwner(self::MEMBER));
+    }
+
+    public function testPromotingAMemberWithoutAConfirmedAddressIsRefused(): void
+    {
+        $organization = $this->orgWithSecondMember();
+        self::requireExampleOrg($organization, new MemberPolicyFacts(self::MEMBER, true));
+
+        $this->expectException(EmailDomainMismatchException::class);
+        $organization->addTeamMember($this->ownersTeamId($organization), new MemberPolicyFacts(self::MEMBER, true));
+    }
+
+    public function testPromotionFailingSeveralPoliciesNamesThemAll(): void
+    {
+        $organization = $this->orgWithSecondMember();
+        self::requireExampleOrg($organization, new MemberPolicyFacts(self::MEMBER, false, emailDomain: 'gmail.com'));
+
+        try {
+            $organization->addTeamMember($this->ownersTeamId($organization), new MemberPolicyFacts(self::MEMBER, false, emailDomain: 'gmail.com'));
+            self::fail('Promoting a member failing both policies should have been refused.');
+        } catch (PolicyNotMetException $e) {
+            self::assertStringContainsString('Not met: two-factor authentication, email address domain.', $e->getMessage());
+        }
+
+        self::assertSame([], $organization->pullPendingEvents());
+    }
+
+    public function testPromotingAnOnDomainMemberRecordsOnlyTheMembership(): void
+    {
+        $organization = $this->orgWithSecondMember();
+        $facts = new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'example.org');
+        self::requireExampleOrg($organization, $facts);
+
+        $organization->addTeamMember($this->ownersTeamId($organization), $facts);
+
+        $events = $organization->pullPendingEvents();
+        self::assertCount(1, $events);
+        self::assertInstanceOf(TeamMemberAdded::class, $events[0]);
+        self::assertTrue($organization->isOwner(self::MEMBER));
+    }
+
+    public function testPromotionRestoresAMemberWhoHasSinceComplied(): void
+    {
+        $organization = $this->orgWithSecondMember();
+        self::requireExampleOrg($organization, new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'gmail.com'));
+        self::assertSame([PolicyComplianceReason::EmailDomain], $organization->unmetPoliciesFor(self::MEMBER)->reasons);
+
+        // They have confirmed an on-domain address since, but no request of theirs has re-verified them.
+        $organization->addTeamMember($this->ownersTeamId($organization), new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'example.org'));
+
+        $events = $organization->pullPendingEvents();
+        self::assertCount(2, $events);
+        self::assertInstanceOf(TeamMemberAdded::class, $events[0]);
+        self::assertInstanceOf(MemberPolicyComplianceRestored::class, $events[1]);
+        self::assertTrue($organization->unmetPoliciesFor(self::MEMBER)->isEmpty());
+    }
+
+    public function testDemotingAnOwnerSuspendedOnlyForOwnerTwoFactorRestoresThem(): void
+    {
+        $organization = $this->orgWithSecondOwner();
+        $facts = new MemberPolicyFacts(self::MEMBER, false);
+        $organization->verifyMemberCompliance($facts);
+        $organization->pullPendingEvents();
+
+        $organization->removeTeamMember($this->ownersTeamId($organization), self::MEMBER, $facts);
+
+        // No org policy asks plain members for 2FA, so the demotion itself lifts the suspension.
+        $events = $organization->pullPendingEvents();
+        self::assertCount(2, $events);
+        self::assertInstanceOf(TeamMemberRemoved::class, $events[0]);
+        self::assertInstanceOf(MemberPolicyComplianceRestored::class, $events[1]);
+        self::assertSame(self::MEMBER, $events[1]->userId);
+        self::assertTrue($organization->unmetPoliciesFor(self::MEMBER)->isEmpty());
+    }
+
+    public function testDemotionKeepsASuspensionAnOrgPolicyStillImposes(): void
+    {
+        $organization = $this->orgWithSecondOwner();
+        $facts = new MemberPolicyFacts(self::MEMBER, false);
+        self::enforceTwoFactor($organization, true, [self::MEMBER => $facts]);
+        $organization->pullPendingEvents();
+
+        $organization->removeTeamMember($this->ownersTeamId($organization), self::MEMBER, $facts);
+
+        $events = $organization->pullPendingEvents();
+        self::assertCount(1, $events);
+        self::assertInstanceOf(TeamMemberRemoved::class, $events[0]);
+        self::assertSame([PolicyComplianceReason::TwoFactor], $organization->unmetPoliciesFor(self::MEMBER)->reasons);
+    }
+
+    public function testDemotionWithoutFactsLeavesTheSuspensionToTheNextRequest(): void
+    {
+        $organization = $this->orgWithSecondOwner();
+        $organization->verifyMemberCompliance(new MemberPolicyFacts(self::MEMBER, false));
+        $organization->pullPendingEvents();
+
+        // The user record is gone, so there is nothing to judge them by.
+        $organization->removeTeamMember($this->ownersTeamId($organization), self::MEMBER, null);
+
+        $events = $organization->pullPendingEvents();
+        self::assertCount(1, $events);
+        self::assertInstanceOf(TeamMemberRemoved::class, $events[0]);
+    }
+
+    public function testCustomTeamChangesDoNotReverify(): void
+    {
+        $organization = $this->orgWithSecondMember();
+        self::requireExampleOrg($organization, new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'gmail.com'));
+        $teamId = new Ulid();
+        $organization->createTeam($teamId, new TeamName('backend'));
+        $organization->pullPendingEvents();
+
+        // Facts that would restore them: a custom team carries no requirement, so nothing is re-judged.
+        $compliant = new MemberPolicyFacts(self::MEMBER, true, emailDomain: 'example.org');
+        $organization->addTeamMember($teamId, $compliant);
+        $organization->removeTeamMember($teamId, self::MEMBER, $compliant);
+
+        $events = $organization->pullPendingEvents();
+        self::assertCount(2, $events);
+        self::assertInstanceOf(TeamMemberAdded::class, $events[0]);
+        self::assertInstanceOf(TeamMemberRemoved::class, $events[1]);
+        self::assertSame([PolicyComplianceReason::EmailDomain], $organization->unmetPoliciesFor(self::MEMBER)->reasons);
+    }
+
+    /**
+     * Require example.org, which the acting owner is on, judging the second member by the given facts.
+     */
+    private static function requireExampleOrg(Organization $organization, MemberPolicyFacts $memberFacts): void
+    {
+        $organization->setPolicies(
+            $organization->policies()->withAllowedEmailDomains(new AllowedEmailDomains('example.org')),
+            self::actor(),
+            [
+                self::OWNER => self::actor(),
+                self::MEMBER => $memberFacts,
+            ],
+        );
+        $organization->pullPendingEvents();
+    }
+
+    private function ownersTeamId(Organization $organization): Ulid
+    {
+        $ownersTeamId = $organization->ownersTeamId();
+        self::assertNotNull($ownersTeamId);
+
+        return $ownersTeamId;
     }
 
     /**
