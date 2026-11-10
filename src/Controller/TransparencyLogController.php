@@ -59,11 +59,14 @@ class TransparencyLogController extends Controller
             $filter->filter($qb);
         }
 
-        // Don't display TOTP events in the result list initially
+        // Don't display events that reveal 2FA status in the result list initially; a member suspension
+        // can only be for a missing second factor when that is the sole policy in force.
         $qb->andWhere('a.type NOT IN (:hidden_types)')
             ->setParameter('hidden_types', [
                 AuditLogEventType::TotpAuthenticationActivated->value,
                 AuditLogEventType::TotpAuthenticationDeactivated->value,
+                AuditLogEventType::OrganizationMemberAccessSuspended->value,
+                AuditLogEventType::OrganizationMemberAccessRestored->value,
             ]);
 
         $auditLogs = new Pagerfanta(new QueryAdapter($qb, false, false));
@@ -80,8 +83,13 @@ class TransparencyLogController extends Controller
         $categoryOrder = ['ownership', 'package', 'version', 'user', 'filterlist', 'advisory', 'organization'];
         $groupedTypes = [];
         foreach (AuditLogEventType::cases() as $type) {
-            // Don't display TOTP events in the type filter initially
-            if ($type === AuditLogEventType::TotpAuthenticationActivated || $type === AuditLogEventType::TotpAuthenticationDeactivated) {
+            // Don't display events that reveal 2FA status in the type filter initially
+            if (\in_array($type, [
+                AuditLogEventType::TotpAuthenticationActivated,
+                AuditLogEventType::TotpAuthenticationDeactivated,
+                AuditLogEventType::OrganizationMemberAccessSuspended,
+                AuditLogEventType::OrganizationMemberAccessRestored,
+            ], true)) {
                 continue;
             }
             $groupedTypes[$type->category()][] = $type;
