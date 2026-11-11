@@ -14,6 +14,8 @@ namespace App\Tests\Controller;
 
 use App\Entity\AuditRecord;
 use App\Log\AuditLogEventType;
+use App\Organization\Domain\PolicyComplianceReason;
+use App\Organization\Domain\UnmetPolicies;
 use App\Tests\IntegrationTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -37,6 +39,55 @@ class TransparencyLogControllerTest extends IntegrationTestCase
         $link = $crawler->filter('a[href="/organizations/acme"]');
         static::assertCount(1, $link);
         static::assertSame('ACME Corp', trim($link->text()));
+    }
+
+    /**
+     * @param array<string, mixed> $query
+     */
+    #[DataProvider('suspensionQueryProvider')]
+    public function testMemberSuspensionsAreNotListedOnTheTransparencyLog(array $query): void
+    {
+        $user = self::createUser('onlooker', 'onlooker@example.com', roles: ['ROLE_USER']);
+        $member = self::createUser('member', 'member@example.com', roles: ['ROLE_USER']);
+        $organization = self::createOrganization('acme', 'ACME Corp');
+        $this->store($user, $member, $organization);
+
+        $this->store(
+            AuditRecord::organizationCreated($organization->id, $organization->slug, $organization->displayName, $user),
+            AuditRecord::organizationMemberAccessSuspended(
+                $organization->id,
+                $organization->slug,
+                $organization->displayName,
+                $member,
+                new UnmetPolicies(PolicyComplianceReason::TwoFactor),
+            ),
+            AuditRecord::organizationMemberAccessRestored($organization->id, $organization->slug, $organization->displayName, $member),
+        );
+
+        $this->client->loginUser($user);
+        $crawler = $this->client->request('GET', '/transparency-log?'.http_build_query($query));
+        static::assertResponseIsSuccessful();
+
+        $types = $crawler->filter('[data-test=audit-log-type]')->each(static fn ($element) => trim($element->text()));
+        static::assertNotContains('Member access suspended', $types);
+        static::assertNotContains('Member access restored', $types);
+        if ($query === []) {
+            static::assertContains('Organization created', $types);
+        }
+
+        $options = $crawler->filter('#type-filter option')->each(static fn ($element) => $element->attr('value'));
+        static::assertContains(AuditLogEventType::OrganizationCreated->value, $options);
+        static::assertNotContains(AuditLogEventType::OrganizationMemberAccessSuspended->value, $options);
+        static::assertNotContains(AuditLogEventType::OrganizationMemberAccessRestored->value, $options);
+    }
+
+    public static function suspensionQueryProvider(): iterable
+    {
+        yield 'unfiltered' => [[]];
+        yield 'filtered by suspension types' => [['type' => [
+            AuditLogEventType::OrganizationMemberAccessSuspended->value,
+            AuditLogEventType::OrganizationMemberAccessRestored->value,
+        ]]];
     }
 
     #[DataProvider('filterProvider')]

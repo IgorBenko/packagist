@@ -28,6 +28,7 @@ use App\Organization\Domain\Exception\TeamNameTakenException;
 use App\Organization\Domain\Exception\TeamNotFoundException;
 use App\Organization\Domain\Exception\TeamProtectedException;
 use App\Organization\Domain\Exception\TwoFactorRequiredException;
+use App\Organization\Domain\MemberPolicyFacts;
 use App\Organization\Domain\Organization;
 use App\Organization\Domain\OrganizationTeamKind;
 use App\Organization\Domain\Slug;
@@ -235,7 +236,7 @@ class OrganizationAggregateTest extends TestCase
         ], $allMembersTeamId);
 
         $this->expectException(TeamProtectedException::class);
-        $organization->addTeamMember($allMembersTeamId, 2, true);
+        $organization->addTeamMember($allMembersTeamId, new MemberPolicyFacts(2, true));
     }
 
     public function testAllMembersTeamCannotBeRemovedFromManually(): void
@@ -245,7 +246,7 @@ class OrganizationAggregateTest extends TestCase
 
         // The creator is in the members team, but its roster is managed automatically.
         $this->expectException(TeamProtectedException::class);
-        $organization->removeTeamMember($allMembersTeamId, self::OWNER);
+        $organization->removeTeamMember($allMembersTeamId, self::OWNER, []);
     }
 
     public function testDeleteTeamRecordsEvent(): void
@@ -277,7 +278,7 @@ class OrganizationAggregateTest extends TestCase
         $organization = $this->created($ownersTeamId);
 
         $this->expectException(NotAMemberException::class);
-        $organization->addTeamMember($ownersTeamId, 999, true);
+        $organization->addTeamMember($ownersTeamId, new MemberPolicyFacts(999, true));
     }
 
     public function testAddingExistingMemberToOwnersRequiresTwoFactor(): void
@@ -292,7 +293,7 @@ class OrganizationAggregateTest extends TestCase
         ]);
 
         $this->expectException(TwoFactorRequiredException::class);
-        $organization->addTeamMember($ownersTeamId, 2, false);
+        $organization->addTeamMember($ownersTeamId, new MemberPolicyFacts(2, false));
     }
 
     public function testAddingExistingMemberToOwnersWithTwoFactorRecordsEvent(): void
@@ -305,7 +306,7 @@ class OrganizationAggregateTest extends TestCase
             ['type' => OrganizationEventType::TeamMemberAdded, 'payload' => ['teamId' => $customTeamId->toRfc4122(), 'userId' => 2]],
         ]);
 
-        $organization->addTeamMember($ownersTeamId, 2, true);
+        $organization->addTeamMember($ownersTeamId, new MemberPolicyFacts(2, true));
 
         $events = $organization->pullPendingEvents();
         self::assertCount(1, $events);
@@ -319,7 +320,7 @@ class OrganizationAggregateTest extends TestCase
         $organization = $this->created($ownersTeamId);
 
         // The creator is already in the owners team.
-        $organization->addTeamMember($ownersTeamId, self::OWNER, true);
+        $organization->addTeamMember($ownersTeamId, new MemberPolicyFacts(self::OWNER, true));
 
         self::assertCount(0, $organization->pullPendingEvents());
     }
@@ -330,7 +331,7 @@ class OrganizationAggregateTest extends TestCase
         $organization = $this->created($ownersTeamId);
 
         $this->expectException(LastOwnerProtectedException::class);
-        $organization->removeTeamMember($ownersTeamId, self::OWNER);
+        $organization->removeTeamMember($ownersTeamId, self::OWNER, []);
     }
 
     public function testRemoveTeamMemberRecordsEventWhenNotLastOwner(): void
@@ -342,7 +343,10 @@ class OrganizationAggregateTest extends TestCase
             ['type' => OrganizationEventType::TeamMemberAdded, 'payload' => ['teamId' => $ownersTeamId->toRfc4122(), 'userId' => 2]],
         ]);
 
-        $organization->removeTeamMember($ownersTeamId, 2);
+        $organization->removeTeamMember($ownersTeamId, 2, [
+            self::OWNER => new MemberPolicyFacts(self::OWNER, true),
+            2 => new MemberPolicyFacts(2, true),
+        ]);
 
         $events = $organization->pullPendingEvents();
         self::assertCount(1, $events);
@@ -355,7 +359,7 @@ class OrganizationAggregateTest extends TestCase
         $organization = $this->created(new Ulid());
 
         $this->expectException(LastOwnerProtectedException::class);
-        $organization->removeMember(self::OWNER);
+        $organization->removeMember(self::OWNER, []);
     }
 
     public function testRemoveMemberRejectsNonMember(): void
@@ -363,7 +367,7 @@ class OrganizationAggregateTest extends TestCase
         $organization = $this->created(new Ulid());
 
         $this->expectException(NotAMemberException::class);
-        $organization->removeMember(999);
+        $organization->removeMember(999, []);
     }
 
     public function testLeaveIsBlockedForLastOwner(): void
@@ -371,7 +375,7 @@ class OrganizationAggregateTest extends TestCase
         $organization = $this->created(new Ulid());
 
         $this->expectException(LastOwnerProtectedException::class);
-        $organization->leave(self::OWNER);
+        $organization->leave(self::OWNER, []);
     }
 
     public function testMemberRemovedClearsAllTeamMembershipsOnReplay(): void

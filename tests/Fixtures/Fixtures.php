@@ -103,14 +103,19 @@ trait Fixtures
     }
 
     /**
+     * An enabled user's address counts as confirmed unless $emailVerified says otherwise.
+     *
      * @param array<string> $roles
      */
-    protected static function createUser(string $username = 'test', string $email = 'test@example.org', string $password = 'testtest', string $apiToken = 'api-token', string $safeApiToken = 'safe-api-token', string $githubId = '12345', bool $enabled = true, array $roles = []): User
+    protected static function createUser(string $username = 'test', string $email = 'test@example.org', string $password = 'testtest', string $apiToken = 'api-token', string $safeApiToken = 'safe-api-token', string $githubId = '12345', bool $enabled = true, array $roles = [], bool $emailVerified = true): User
     {
         $user = new User();
         $user->setEnabled($enabled);
         $user->setUsername($username);
         $user->setEmail($email);
+        if ($enabled && $emailVerified) {
+            $user->markEmailVerified(new \DateTimeImmutable());
+        }
         $user->setPassword($password);
         $user->setApiToken($apiToken);
         $user->setSafeApiToken($safeApiToken);

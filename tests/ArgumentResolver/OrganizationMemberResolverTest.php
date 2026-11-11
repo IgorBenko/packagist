@@ -68,11 +68,12 @@ class OrganizationMemberResolverTest extends TestCase
             ->with($organization->id, 'JANE')
             ->willReturn($member);
 
-        // Read access to the organization is required as defense in depth.
+        // Standing in the organization is required as defense in depth, without its policy compliance:
+        // a suspended member is refused by the action's own guard, not by a 404 from the resolver.
         $security = $this->createMock(Security::class);
         $security->expects(self::once())
             ->method('isGranted')
-            ->with(OrganizationActions::View->value, $organization)
+            ->with(OrganizationActions::Visible->value, $organization)
             ->willReturn(true);
         $resolver = new OrganizationMemberResolver($members, $organizations, $security);
 

@@ -49,7 +49,7 @@ class ProfileControllerTest extends IntegrationTestCase
         $this->assertResponseStatusCodeSame(302);
 
         $recipients = array_map(static fn (Email $mail) => $mail->getTo()[0]->getAddress(), $this->getMailerMessages());
-        $this->assertEqualsCanonicalizing([$oldEmail, $newEmail], $recipients, 'Notification should have been sent to both old and new email');
+        $this->assertEqualsCanonicalizing([$oldEmail, $newEmail, $newEmail], $recipients, 'Notification should have been sent to both old and new email, and a confirmation link to the new one');
 
         $em = self::getEM();
         $em->clear();
@@ -59,6 +59,7 @@ class ProfileControllerTest extends IntegrationTestCase
         $this->assertSame($newUsername, $user->getUsername());
         $this->assertNull($user->getPasswordRequestedAt());
         $this->assertNull($user->getConfirmationToken());
+        $this->assertFalse($user->isEmailVerified(), 'a new address is unconfirmed until its link is followed');
 
         $emailAuditRecord = $em->getRepository(AuditRecord::class)->findOneBy([
             'type' => AuditLogEventType::EmailChanged,
@@ -78,6 +79,144 @@ class ProfileControllerTest extends IntegrationTestCase
         $this->assertSame($oldUsername, $usernameAuditRecord->attributes['username_from'] ?? null);
         $this->assertSame($user->getUsernameCanonical(), $usernameAuditRecord->attributes['username_to'] ?? null);
         $this->assertSame($user->getUsernameCanonical(), $usernameAuditRecord->attributes['actor']['username'] ?? null);
+    }
+
+    public function testAChangedEmailIsConfirmedThroughTheEmailedLink(): void
+    {
+        $user = self::createUser();
+        $this->store($user);
+        $this->client->loginUser($user);
+
+        $crawler = $this->client->request('GET', '/profile/edit');
+        $this->client->submit($crawler->selectButton('Update')->form(), [
+            'packagist_user_profile[email]' => 'new-email@example.org',
+        ]);
+        self::assertResponseRedirects('/profile/');
+        // Mails are only collected for the last request.
+        $link = $this->confirmationLink('new-email@example.org');
+
+        $crawler = $this->client->request('GET', '/profile/edit');
+        self::assertSame('Not confirmed. Send a confirmation link', trim($crawler->filter('.email-confirmation-status')->text()));
+
+        $this->client->request('GET', $link);
+        self::assertResponseRedirects('/profile/edit');
+
+        $crawler = $this->client->request('GET', '/profile/edit');
+        self::assertSame('Confirmed', trim($crawler->filter('.email-confirmation-status')->text()));
+
+        self::assertTrue($this->reloadUser($user)->isEmailVerified());
+    }
+
+    public function testAProfileSaveThatKeepsTheAddressKeepsItConfirmed(): void
+    {
+        $user = self::createUser();
+        $this->store($user);
+        $this->client->loginUser($user);
+
+        // Only the case differs, which is the same address.
+        $crawler = $this->client->request('GET', '/profile/edit');
+        $this->client->submit($crawler->selectButton('Update')->form(), [
+            'packagist_user_profile[email]' => 'Test@Example.org',
+            'packagist_user_profile[username]' => 'renamed',
+        ]);
+        self::assertResponseRedirects('/profile/');
+
+        self::assertTrue($this->reloadUser($user)->isEmailVerified());
+        foreach ($this->getMailerMessages() as $mail) {
+            self::assertInstanceOf(Email::class, $mail);
+            self::assertNotSame('Please confirm your email', $mail->getSubject());
+        }
+    }
+
+    public function testAnUnconfirmedUserCanRequestAConfirmationLink(): void
+    {
+        $user = self::createUser(emailVerified: false);
+        $this->store($user);
+        $this->client->loginUser($user);
+
+        $crawler = $this->client->request('GET', '/profile/edit');
+        $this->client->submit($crawler->filter('#send-email-confirmation')->form());
+        self::assertResponseRedirects('/profile/edit');
+
+        $this->client->request('GET', $this->confirmationLink('test@example.org'));
+        self::assertTrue($this->reloadUser($user)->isEmailVerified());
+    }
+
+    public function testAConfirmationLinkIsNotSentWithoutAValidToken(): void
+    {
+        $user = self::createUser(emailVerified: false);
+        $this->store($user);
+        $this->client->loginUser($user);
+
+        $this->client->request('POST', '/profile/email/send-confirmation', ['token' => 'invalid']);
+        self::assertResponseRedirects('/profile/edit');
+
+        self::assertEmailCount(0);
+    }
+
+    public function testAConfirmationLinkStopsWorkingOnceTheAddressChanges(): void
+    {
+        $user = self::createUser(emailVerified: false);
+        $this->store($user);
+        $this->client->loginUser($user);
+
+        $crawler = $this->client->request('GET', '/profile/edit');
+        $this->client->submit($crawler->filter('#send-email-confirmation')->form());
+        $link = $this->confirmationLink('test@example.org');
+
+        $crawler = $this->client->request('GET', '/profile/edit');
+        $this->client->submit($crawler->selectButton('Update')->form(), [
+            'packagist_user_profile[email]' => 'other@example.org',
+        ]);
+
+        // The link proves control of test@example.org, which is no longer the address on the account.
+        $this->client->request('GET', $link);
+        self::assertResponseRedirects('/profile/edit');
+        self::assertFalse($this->reloadUser($user)->isEmailVerified());
+    }
+
+    public function testAConfirmationLinkOnlyWorksForTheAccountItWasSentFor(): void
+    {
+        $owner = self::createUser('owner', 'owner@example.org', emailVerified: false);
+        $other = self::createUser('other', 'other@example.org', emailVerified: false);
+        $this->store($owner, $other);
+
+        $this->client->loginUser($owner);
+        $crawler = $this->client->request('GET', '/profile/edit');
+        $this->client->submit($crawler->filter('#send-email-confirmation')->form());
+        $link = $this->confirmationLink('owner@example.org');
+
+        $this->client->loginUser($other);
+        $this->client->request('GET', $link);
+        self::assertResponseRedirects('/profile/edit');
+
+        self::assertFalse($this->reloadUser($other)->isEmailVerified());
+        self::assertFalse($this->reloadUser($owner)->isEmailVerified());
+    }
+
+    private function confirmationLink(string $address): string
+    {
+        foreach ($this->getMailerMessages() as $mail) {
+            if (!$mail instanceof Email || $mail->getSubject() !== 'Please confirm your email' || $mail->getTo()[0]->getAddress() !== $address) {
+                continue;
+            }
+
+            self::assertSame(1, preg_match('{/profile/email/confirm\?\S+}', $mail->getTextBody() ?? '', $match), 'The mail carries a confirmation link');
+
+            return $match[0];
+        }
+
+        self::fail('No confirmation link was sent to '.$address);
+    }
+
+    private function reloadUser(User $user): User
+    {
+        $em = self::getEM();
+        $em->clear();
+        $reloaded = $em->getRepository(User::class)->find($user->getId());
+        self::assertNotNull($reloaded);
+
+        return $reloaded;
     }
 
     public function testPublicProfileLinksToAuditLog(): void

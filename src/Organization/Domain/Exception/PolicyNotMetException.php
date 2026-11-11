@@ -13,8 +13,8 @@
 namespace App\Organization\Domain\Exception;
 
 /**
- * An org policy required for acceptance is not satisfied (currently: 2FA is mandatory to become an
- * owner). Acceptance is blocked and the invitation stays pending until the invitee complies.
+ * An org policy required to join or to become an owner is not satisfied. On invitation acceptance the
+ * invitation stays pending until the invitee complies; on promotion the target stays a plain member.
  */
 final class PolicyNotMetException extends OrganizationException
 {

@@ -18,17 +18,16 @@ use App\Entity\UserRepository;
 use App\Organization\Domain\Exception\TeamNameTakenException;
 use App\Organization\Domain\Exception\TeamNotFoundException;
 use App\Organization\Domain\Exception\TeamProtectedException;
+use App\Organization\Domain\MemberPolicyFacts;
 use App\Organization\Domain\Organization;
 use App\Organization\Domain\TeamName;
-use App\Organization\EventStore\Actor;
 use App\Organization\EventStore\EventStore;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
-use Symfony\Bundle\SecurityBundle\Security;
 use Symfony\Component\Uid\Ulid;
 
 /**
  * Application service for team & member management. Follows the reconstitute → command → append
- * pattern of {@see OrganizationManager}: external facts (2FA, admin status) are resolved here, the
+ * pattern of {@see OrganizationManager}: external facts (policy facts, admin status) are resolved here, the
  * aggregate enforces the domain invariants, and the projection's unique constraint is the final
  * backstop for team-name uniqueness.
  */
@@ -37,7 +36,8 @@ final class OrganizationMembershipManager
     public function __construct(
         private readonly EventStore $eventStore,
         private readonly UserRepository $userRepo,
-        private readonly Security $security,
+        private readonly OrganizationActorResolver $actorResolver,
+        private readonly MemberPolicyFactsResolver $policyFacts,
     ) {
     }
 
@@ -70,19 +70,20 @@ final class OrganizationMembershipManager
 
     public function addTeamMember(OrganizationReadModel $organization, User $actor, Ulid $teamId, int $userId, ?string $ip): void
     {
-        $targetHasTwoFactor = $this->userRepo->find($userId)?->hasSecondFactorAuthenticationEnabled() ?? false;
+        // A user record that has gone meets no requirement: it can still join a custom team, never `owners`.
+        $target = $this->factsFor($userId) ?? new MemberPolicyFacts($userId, false);
 
-        $this->mutate($organization, $actor, static fn (Organization $org) => $org->addTeamMember($teamId, $userId, $targetHasTwoFactor), $ip);
+        $this->mutate($organization, $actor, static fn (Organization $org) => $org->addTeamMember($teamId, $target), $ip);
     }
 
     public function removeTeamMember(OrganizationReadModel $organization, User $actor, Ulid $teamId, int $userId, ?string $ip): void
     {
-        $this->mutate($organization, $actor, static fn (Organization $org) => $org->removeTeamMember($teamId, $userId), $ip);
+        $this->mutate($organization, $actor, fn (Organization $org) => $org->removeTeamMember($teamId, $userId, $this->ownerFacts($org)), $ip);
     }
 
     public function removeMember(OrganizationReadModel $organization, User $actor, int $userId, ?string $ip): void
     {
-        $this->mutate($organization, $actor, static fn (Organization $org) => $org->removeMember($userId), $ip);
+        $this->mutate($organization, $actor, fn (Organization $org) => $org->removeMember($userId, $this->ownerFacts($org)), $ip);
     }
 
     /**
@@ -90,7 +91,22 @@ final class OrganizationMembershipManager
      */
     public function leave(OrganizationReadModel $organization, User $actor, ?string $ip): void
     {
-        $this->mutate($organization, $actor, static fn (Organization $org) => $org->leave($actor->getId()), $ip);
+        $this->mutate($organization, $actor, fn (Organization $org) => $org->leave($actor->getId(), $this->ownerFacts($org)), $ip);
+    }
+
+    /**
+     * @return array<int, MemberPolicyFacts>
+     */
+    private function ownerFacts(Organization $organization): array
+    {
+        return $this->policyFacts->forUserIds($organization->owners());
+    }
+
+    private function factsFor(int $userId): ?MemberPolicyFacts
+    {
+        $user = $this->userRepo->find($userId);
+
+        return $user !== null ? $this->policyFacts->forUser($user) : null;
     }
 
     /**
@@ -106,7 +122,7 @@ final class OrganizationMembershipManager
         $command($aggregate);
 
         try {
-            $this->eventStore->append($aggregate, $this->actorFor($aggregate, $actor), $ip);
+            $this->eventStore->append($aggregate, $this->actorResolver->resolve($aggregate, $actor), $ip);
         } catch (UniqueConstraintViolationException $e) {
             if (str_contains($e->getMessage(), 'org_team_name_uniq')) {
                 throw new TeamNameTakenException('A team with this name already exists in this organization.', 0, $e);
@@ -114,22 +130,5 @@ final class OrganizationMembershipManager
 
             throw $e;
         }
-    }
-
-    /**
-     * An owner acts as `owner`; a platform moderator who is not an owner acts as `packagist-admin`;
-     * any other org member (e.g. leaving on their own) acts as a plain `member`.
-     */
-    private function actorFor(Organization $aggregate, User $actor): Actor
-    {
-        if ($aggregate->isOwner($actor->getId())) {
-            return Actor::member($actor);
-        }
-
-        if ($this->security->isGranted('ROLE_ADMIN')) {
-            return Actor::packagistAdmin($actor);
-        }
-
-        return Actor::member($actor);
     }
 }

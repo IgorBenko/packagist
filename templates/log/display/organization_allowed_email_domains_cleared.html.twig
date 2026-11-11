@@ -1,0 +1,4 @@
+{% import 'log/macros.html.twig' as log %}
+
+Email address domain requirement cleared for <strong>{{ log.organizationLink(display.organization) }}</strong><br>
+Cleared by: {{ log.userLink(display.actor.username) }}

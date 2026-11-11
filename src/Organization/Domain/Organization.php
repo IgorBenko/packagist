@@ -12,8 +12,11 @@
 
 namespace App\Organization\Domain;
 
+use App\Organization\Domain\Event\AllowedEmailDomainsEdited;
 use App\Organization\Domain\Event\MemberJoined;
 use App\Organization\Domain\Event\MemberLeft;
+use App\Organization\Domain\Event\MemberPolicyComplianceFailed;
+use App\Organization\Domain\Event\MemberPolicyComplianceRestored;
 use App\Organization\Domain\Event\MemberRemoved;
 use App\Organization\Domain\Event\OrganizationCreated;
 use App\Organization\Domain\Event\OrganizationNameChanged;
@@ -23,8 +26,12 @@ use App\Organization\Domain\Event\TeamDeleted;
 use App\Organization\Domain\Event\TeamMemberAdded;
 use App\Organization\Domain\Event\TeamMemberRemoved;
 use App\Organization\Domain\Event\TeamRenamed;
+use App\Organization\Domain\Event\TwoFactorEnforcementEdited;
+use App\Organization\Domain\Exception\EmailDomainMismatchException;
 use App\Organization\Domain\Exception\LastOwnerProtectedException;
 use App\Organization\Domain\Exception\NotAMemberException;
+use App\Organization\Domain\Exception\OrganizationException;
+use App\Organization\Domain\Exception\PolicyNotMetException;
 use App\Organization\Domain\Exception\TeamNameTakenException;
 use App\Organization\Domain\Exception\TeamNotFoundException;
 use App\Organization\Domain\Exception\TeamProtectedException;
@@ -71,6 +78,20 @@ final class Organization extends AbstractAggregate
     /** @var list<int> org member user ids, tracked directly from MemberJoined / MemberLeft / MemberRemoved */
     private array $members = [];
 
+    private OrganizationPolicies $policies;
+
+    /** @var array<int, UnmetPolicies> userId => the policies that member currently fails, absent when none */
+    private array $suspendedMembers = [];
+
+    protected function __construct(Ulid $id)
+    {
+        parent::__construct($id);
+
+        // An org has no policy active until an event turns one on, including one whose stream has not been
+        // replayed yet.
+        $this->policies = new OrganizationPolicies();
+    }
+
     public static function create(Ulid $id, Slug $slug, DisplayName $displayName, Ulid $ownersTeamId, Ulid $allMembersTeamId, int $ownerId): self
     {
         $organization = new self($id);
@@ -108,6 +129,138 @@ final class Organization extends AbstractAggregate
         }
 
         $this->record(new OrganizationSlugChanged($this->id, $slug->value, $this->slug));
+    }
+
+    /**
+     * Set the policy set as a whole, recording only the policies whose value actually changed. The facts
+     * are known locally, so members are evaluated in the same batch instead of lazily: requiring 2FA
+     * suspends the members without it immediately, clearing a requirement restores the ones it suspended.
+     *
+     * One command rather than one per policy so the guards below answer for the whole set: an edit that
+     * fails any of them leaves the org untouched instead of landing the policies checked first. Members
+     * are re-verified once for the same reason, so falling behind on two policies in one edit is a single
+     * suspension naming both.
+     *
+     * @param array<int, MemberPolicyFacts> $memberFacts userId => facts, for every current member
+     *
+     * @throws TwoFactorRequiredException   an owner cannot impose a policy they do not satisfy themselves
+     * @throws EmailDomainMismatchException an owner cannot impose a domain they are not on themselves
+     */
+    public function setPolicies(OrganizationPolicies $desired, MemberPolicyFacts $actorFacts, array $memberFacts): void
+    {
+        $twoFactorChanged = $desired->enforceTwoFactor !== $this->policies->enforceTwoFactor;
+        $emailDomainsChanged = !$desired->allowedEmailDomains->equals($this->policies->allowedEmailDomains);
+
+        if (!$twoFactorChanged && !$emailDomainsChanged) {
+            return;
+        }
+
+        // Every guard runs before the first record(), which applies as it queues: an edit is all-or-nothing.
+        // Only a policy that changes is guarded, so an owner who fell out of compliance later does not block
+        // edits to another policy. A suspended owner never gets here: the voter refuses them this page.
+        if ($twoFactorChanged && $desired->enforceTwoFactor && !$actorFacts->hasTwoFactor) {
+            throw new TwoFactorRequiredException('You must enable two-factor authentication on your own account before requiring it from the organization.');
+        }
+
+        if ($emailDomainsChanged && !$desired->allowedEmailDomains->isEmpty()) {
+            $this->assertOwnersOnAllowedDomains($desired->allowedEmailDomains, $actorFacts, $memberFacts);
+        }
+
+        if ($twoFactorChanged) {
+            $this->record(new TwoFactorEnforcementEdited($this->id, $desired->enforceTwoFactor));
+        }
+
+        if ($emailDomainsChanged) {
+            $this->record(new AllowedEmailDomainsEdited($this->id, $desired->allowedEmailDomains));
+        }
+
+        $this->reverifyMembers($memberFacts);
+    }
+
+    /**
+     * A domain requirement may not suspend an owner, not only the one saving it. Unlike 2FA, the remedy is
+     * an address on a domain somebody else picked, so an owner left outside the set cannot restore
+     * themselves and would need a co-owner or a Packagist admin to undo the policy for them.
+     *
+     * The uncovered domains are named because the acting owner has to widen the set or replace the owner,
+     * and cannot see member addresses anywhere in the UI. Addresses themselves stay unmentioned.
+     *
+     * @param array<int, MemberPolicyFacts> $memberFacts userId => facts, for every current member
+     *
+     * @throws EmailDomainMismatchException
+     */
+    private function assertOwnersOnAllowedDomains(AllowedEmailDomains $domains, MemberPolicyFacts $actorFacts, array $memberFacts): void
+    {
+        // Ownership comes from the aggregate, never the passed facts. Checked first so the common case, an
+        // owner excluding themselves, is told so directly rather than through the list below.
+        if ($this->isOwner($actorFacts->userId) && !$domains->matches($actorFacts->emailDomain)) {
+            throw new EmailDomainMismatchException('Your own account email address must be confirmed and on one of the domains you require, otherwise saving this would suspend you from your own organization.');
+        }
+
+        $uncovered = [];
+        foreach ($this->members as $userId) {
+            // An owner whose facts are missing cannot be judged, as in reverifyMembers().
+            if (!$this->isOwner($userId) || !isset($memberFacts[$userId])) {
+                continue;
+            }
+
+            $emailDomain = $memberFacts[$userId]->emailDomain;
+            if (!$domains->matches($emailDomain)) {
+                $uncovered[$emailDomain ?? '(no confirmed address)'] = true;
+            }
+        }
+
+        if ($uncovered !== []) {
+            ksort($uncovered);
+
+            throw new EmailDomainMismatchException(sprintf(
+                'Every organization owner needs an account email address on one of the domains you require, otherwise saving this would suspend an owner from their own organization. Not covered: %s.',
+                implode(', ', array_keys($uncovered)),
+            ));
+        }
+    }
+
+    /**
+     * A member whose facts are missing (e.g. their user record is gone) is left alone; their next request
+     * verifies them inline.
+     *
+     * @param array<int, MemberPolicyFacts> $memberFacts userId => facts, for every current member
+     */
+    private function reverifyMembers(array $memberFacts): void
+    {
+        foreach ($this->members as $userId) {
+            if (isset($memberFacts[$userId])) {
+                $this->verifyMemberCompliance($memberFacts[$userId]);
+            }
+        }
+    }
+
+    /**
+     * Record the member's compliance with every active policy, suspending or restoring them when the
+     * verdict changed. Idempotent: a member who is already in the resulting state produces no event.
+     *
+     * This is the inline verification the enforcer runs on a member's own requests, and the same path the
+     * synchronous evaluation above uses, so the two can never disagree about what compliance means.
+     */
+    public function verifyMemberCompliance(MemberPolicyFacts $facts): void
+    {
+        if (!$this->isOrgMember($facts->userId)) {
+            return;
+        }
+
+        // The aggregate is authoritative on ownership, so it fills that fact in rather than trusting the
+        // caller, who may have resolved the rest from the read model.
+        $unmet = $this->policies->unmetBy($facts->withOwnership($this->isOwner($facts->userId)));
+        $suspendedFor = $this->suspendedMembers[$facts->userId] ?? UnmetPolicies::none();
+
+        // Set equality: falling behind on a second policy is a change, re-verifying the same verdict is not.
+        if ($unmet->equals($suspendedFor)) {
+            return;
+        }
+
+        $this->record(!$unmet->isEmpty()
+            ? new MemberPolicyComplianceFailed($this->id, $facts->userId, $unmet)
+            : new MemberPolicyComplianceRestored($this->id, $facts->userId));
     }
 
     /**
@@ -158,18 +311,24 @@ final class Organization extends AbstractAggregate
     /**
      * Add an existing org member to a further team. No-op if already in the team.
      *
-     * @param bool $targetHasTwoFactor whether the target user has 2FA enabled (checked by the caller)
+     * Becoming an owner requires meeting every policy as an owner. {@see setPolicies()} applies this rule to
+     * existing owners and invitation acceptance applies it to new ones.
+     *
+     * @param MemberPolicyFacts $target the user to add, with facts resolved by the caller
      *
      * @throws TeamNotFoundException
-     * @throws TeamProtectedException     the `all organization members` team is managed automatically
-     * @throws NotAMemberException        the target has not joined the org (joining is invitation-only)
-     * @throws TwoFactorRequiredException adding to `owners` requires the target to have 2FA
+     * @throws TeamProtectedException       the `all organization members` team is managed automatically
+     * @throws NotAMemberException          the target has not joined the org (joining is invitation-only)
+     * @throws TwoFactorRequiredException   adding to `owners` requires the target to have 2FA
+     * @throws EmailDomainMismatchException adding to `owners` requires an address on an allowed domain
+     * @throws PolicyNotMetException        adding to `owners` fails several requirements at once
      */
-    public function addTeamMember(Ulid $teamId, int $userId, bool $targetHasTwoFactor): void
+    public function addTeamMember(Ulid $teamId, MemberPolicyFacts $target): void
     {
         $this->assertTeamExists($teamId);
         $this->assertNotAllMembersTeam($teamId);
 
+        $userId = $target->userId;
         if (!$this->isOrgMember($userId)) {
             throw new NotAMemberException('The user is not a member of this organization.');
         }
@@ -178,22 +337,35 @@ final class Organization extends AbstractAggregate
             return;
         }
 
-        if ($teamId->equals($this->ownersTeamId) && !$targetHasTwoFactor) {
-            throw new TwoFactorRequiredException('The user must enable two-factor authentication before becoming an owner.');
+        if (!$teamId->equals($this->ownersTeamId)) {
+            $this->record(new TeamMemberAdded($this->id, $teamId, $userId));
+
+            return;
+        }
+
+        $unmet = $this->policies->unmetBy($target->withOwnership(true));
+        if (!$unmet->isEmpty()) {
+            throw self::ownerPromotionRefused($unmet);
         }
 
         $this->record(new TeamMemberAdded($this->id, $teamId, $userId));
+        // Clears a suspension they have since remedied without a request of their own re-verifying them.
+        $this->verifyMemberCompliance($target);
     }
 
     /**
      * Remove a user from a single team.
      *
+     * @param array<int, MemberPolicyFacts> $ownerFacts userId => facts, for every current owner whose user
+     *                                                record still exists; leaving `owners` drops the owner
+     *                                                requirements, so the removed owner is re-verified
+     *
      * @throws TeamNotFoundException
      * @throws TeamProtectedException      the `all organization members` team is managed automatically
      * @throws NotAMemberException         the user is not in the team
-     * @throws LastOwnerProtectedException would empty the `owners` team
+     * @throws LastOwnerProtectedException would empty the `owners` team, or leave no owner who meets the policies
      */
-    public function removeTeamMember(Ulid $teamId, int $userId): void
+    public function removeTeamMember(Ulid $teamId, int $userId, array $ownerFacts): void
     {
         $this->assertTeamExists($teamId);
         $this->assertNotAllMembersTeam($teamId);
@@ -202,11 +374,37 @@ final class Organization extends AbstractAggregate
             throw new NotAMemberException('The user is not a member of this team.');
         }
 
-        if ($teamId->equals($this->ownersTeamId) && $this->ownerCount() === 1) {
+        $isOwnersTeam = $teamId->equals($this->ownersTeamId);
+        if ($isOwnersTeam && $this->ownerCount() === 1) {
             throw new LastOwnerProtectedException('The last owner cannot be removed from the organization.');
         }
 
+        if ($isOwnersTeam) {
+            $this->assertNotLastCompliantOwner($userId, $ownerFacts);
+        }
+
         $this->record(new TeamMemberRemoved($this->id, $teamId, $userId));
+
+        if ($isOwnersTeam && isset($ownerFacts[$userId])) {
+            $this->verifyMemberCompliance($ownerFacts[$userId]);
+        }
+    }
+
+    /**
+     * The error the owner sees when a promotion is refused. It does not show the user's email domain. Owners
+     * cannot see member email addresses, and only the user can fix their address, so the owner does not
+     * need to know it.
+     */
+    private static function ownerPromotionRefused(UnmetPolicies $unmet): OrganizationException
+    {
+        return match ($unmet->sole()) {
+            PolicyComplianceReason::TwoFactor => new TwoFactorRequiredException('The user must enable two-factor authentication before becoming an owner.'),
+            PolicyComplianceReason::EmailDomain => new EmailDomainMismatchException('The user must have a confirmed account email address on one of the domains this organization requires before becoming an owner.'),
+            null => new PolicyNotMetException(\sprintf(
+                'The user must meet every organization requirement before becoming an owner. Not met: %s.',
+                implode(', ', array_map(static fn (PolicyComplianceReason $reason): string => $reason->label(), $unmet->reasons)),
+            )),
+        };
     }
 
     /**
@@ -249,12 +447,14 @@ final class Organization extends AbstractAggregate
     /**
      * Remove a user from the entire org (all their teams at once).
      *
+     * @param array<int, MemberPolicyFacts> $ownerFacts userId => facts, for every current owner whose user record still exists
+     *
      * @throws NotAMemberException
      * @throws LastOwnerProtectedException
      */
-    public function removeMember(int $userId): void
+    public function removeMember(int $userId, array $ownerFacts): void
     {
-        $this->assertRemovableMember($userId);
+        $this->assertRemovableMember($userId, $ownerFacts);
 
         $this->record(new MemberRemoved($this->id, $userId));
     }
@@ -262,12 +462,14 @@ final class Organization extends AbstractAggregate
     /**
      * A member voluntarily leaves the org entirely (all teams).
      *
+     * @param array<int, MemberPolicyFacts> $ownerFacts userId => facts, for every current owner whose user record still exists
+     *
      * @throws NotAMemberException
-     * @throws LastOwnerProtectedException the last owner must appoint another owner first
+     * @throws LastOwnerProtectedException the last owner, or the last owner who meets the policies, must appoint another owner first
      */
-    public function leave(int $userId): void
+    public function leave(int $userId, array $ownerFacts): void
     {
-        $this->assertRemovableMember($userId);
+        $this->assertRemovableMember($userId, $ownerFacts);
 
         $this->record(new MemberLeft($this->id, $userId));
     }
@@ -319,6 +521,35 @@ final class Organization extends AbstractAggregate
     public function isOrgMember(int $userId): bool
     {
         return \in_array($userId, $this->members, true);
+    }
+
+    /**
+     * @return list<int> every current owner's user id, so the caller can resolve their policy facts
+     */
+    public function owners(): array
+    {
+        return $this->teamMembers[$this->ownersTeamId?->toRfc4122()] ?? [];
+    }
+
+    /**
+     * @return list<int> every current member's user id, so the caller can resolve their policy facts
+     */
+    public function members(): array
+    {
+        return $this->members;
+    }
+
+    public function policies(): OrganizationPolicies
+    {
+        return $this->policies;
+    }
+
+    /**
+     * The policies this member is currently suspended for, empty when their access is intact.
+     */
+    public function unmetPoliciesFor(int $userId): UnmetPolicies
+    {
+        return $this->suspendedMembers[$userId] ?? UnmetPolicies::none();
     }
 
     private function isInTeam(Ulid $teamId, int $userId): bool
@@ -375,15 +606,57 @@ final class Organization extends AbstractAggregate
         }
     }
 
-    private function assertRemovableMember(int $userId): void
+    /**
+     * @param array<int, MemberPolicyFacts> $ownerFacts
+     */
+    private function assertRemovableMember(int $userId, array $ownerFacts): void
     {
         if (!$this->isOrgMember($userId)) {
             throw new NotAMemberException('The user is not a member of this organization.');
         }
 
-        if ($this->ownersTeamId !== null && $this->isInTeam($this->ownersTeamId, $userId) && $this->ownerCount() === 1) {
+        if (!$this->isOwner($userId)) {
+            return;
+        }
+
+        if ($this->ownerCount() === 1) {
             throw new LastOwnerProtectedException('The last owner cannot leave or be removed from the organization.');
         }
+
+        $this->assertNotLastCompliantOwner($userId, $ownerFacts);
+    }
+
+    /**
+     * Suspended owners cannot use the org, the policies page included, so once the last owner who meets
+     * the policies goes, only a Packagist admin can recover it. Judged on fresh facts: an owner may have
+     * changed their email since their suspension state was last recorded.
+     *
+     * @param array<int, MemberPolicyFacts> $ownerFacts
+     */
+    private function assertNotLastCompliantOwner(int $userId, array $ownerFacts): void
+    {
+        if (!$this->meetsOwnerPolicies($userId, $ownerFacts)) {
+            return;
+        }
+
+        foreach ($this->owners() as $ownerId) {
+            if ($ownerId !== $userId && $this->meetsOwnerPolicies($ownerId, $ownerFacts)) {
+                return;
+            }
+        }
+
+        throw new LastOwnerProtectedException('This is the only owner who meets the organization policies. Another owner must meet them, or the policies must change, before this owner can leave or be removed.');
+    }
+
+    /**
+     * @param array<int, MemberPolicyFacts> $ownerFacts
+     */
+    private function meetsOwnerPolicies(int $userId, array $ownerFacts): bool
+    {
+        // A user record that has gone meets no requirement.
+        $facts = $ownerFacts[$userId] ?? null;
+
+        return $facts !== null && $this->policies->unmetBy($facts->withOwnership(true))->isEmpty();
     }
 
     protected function apply(DomainEvent $event): void
@@ -400,6 +673,10 @@ final class Organization extends AbstractAggregate
             $event instanceof MemberJoined => $this->applyMemberJoined($event),
             $event instanceof MemberRemoved => $this->applyMemberGone($event->userId),
             $event instanceof MemberLeft => $this->applyMemberGone($event->userId),
+            $event instanceof TwoFactorEnforcementEdited => $this->policies = $this->policies->withTwoFactorEnforcement($event->enforced),
+            $event instanceof AllowedEmailDomainsEdited => $this->policies = $this->policies->withAllowedEmailDomains($event->allowedEmailDomains),
+            $event instanceof MemberPolicyComplianceFailed => $this->suspendedMembers[$event->userId] = $event->unmetPolicies,
+            $event instanceof MemberPolicyComplianceRestored => $this->applyComplianceRestored($event),
             default => throw new \LogicException('Unhandled organization event: '.$event->eventType()->value),
         };
     }
@@ -442,12 +719,20 @@ final class Organization extends AbstractAggregate
         }
     }
 
+    private function applyComplianceRestored(MemberPolicyComplianceRestored $event): void
+    {
+        unset($this->suspendedMembers[$event->userId]);
+    }
+
     private function applyMemberGone(int $userId): void
     {
         $this->members = array_values(array_filter(
             $this->members,
             static fn (int $id): bool => $id !== $userId,
         ));
+
+        // A former member has no compliance state; re-joining starts from a clean slate.
+        unset($this->suspendedMembers[$userId]);
 
         foreach ($this->teamMembers as $key => $members) {
             $this->teamMembers[$key] = array_values(array_filter(
@@ -474,6 +759,10 @@ final class Organization extends AbstractAggregate
             OrganizationEventType::MemberJoined => MemberJoined::fromPayload($id, $payload),
             OrganizationEventType::MemberRemoved => MemberRemoved::fromPayload($id, $payload),
             OrganizationEventType::MemberLeft => MemberLeft::fromPayload($id, $payload),
+            OrganizationEventType::TwoFactorEnforcementEdited => TwoFactorEnforcementEdited::fromPayload($id, $payload),
+            OrganizationEventType::AllowedEmailDomainsEdited => AllowedEmailDomainsEdited::fromPayload($id, $payload),
+            OrganizationEventType::MemberPolicyComplianceFailed => MemberPolicyComplianceFailed::fromPayload($id, $payload),
+            OrganizationEventType::MemberPolicyComplianceRestored => MemberPolicyComplianceRestored::fromPayload($id, $payload),
             // Invitation-stream events belong to the Invitation aggregate and never appear in an org's
             // history, so reconstituting an org never denormalizes them.
             OrganizationEventType::UserInvitationSent,

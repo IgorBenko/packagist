@@ -101,6 +101,15 @@ class OrganizationInvitation
         return $this->status;
     }
 
+    /**
+     * Whether the link went to the address on this account. Only then does using the link prove the account's
+     * address: anyone holding the link can accept it, whatever address their account has.
+     */
+    public function wasSentTo(User $user): bool
+    {
+        return mb_strtolower($this->email) === $user->getEmailCanonical();
+    }
+
     private function isPending(): bool
     {
         return $this->status === InvitationStatus::Pending;
