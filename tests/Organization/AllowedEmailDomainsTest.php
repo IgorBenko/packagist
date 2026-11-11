@@ -83,7 +83,7 @@ class AllowedEmailDomainsTest extends TestCase
     {
         $this->expectException(InvalidEmailDomainException::class);
 
-        new AllowedEmailDomains($domain);
+        AllowedEmailDomains::fromInput($domain);
     }
 
     public function testMoreThanTheMaximumIsRefused(): void
@@ -92,7 +92,7 @@ class AllowedEmailDomainsTest extends TestCase
 
         $this->expectException(InvalidEmailDomainException::class);
 
-        new AllowedEmailDomains(...$domains);
+        AllowedEmailDomains::fromInput(...$domains);
     }
 
     public function testStoredValuesRoundTrip(): void
@@ -100,5 +100,20 @@ class AllowedEmailDomainsTest extends TestCase
         $domains = new AllowedEmailDomains('acme.com', 'acme.io');
 
         self::assertTrue(AllowedEmailDomains::fromValues($domains->toValues())->equals($domains));
+    }
+
+    public function testStoredValuesTheCurrentRulesRefuseStillLoad(): void
+    {
+        $stored = ['not a domain', ...array_map(static fn (int $i): string => 'domain'.$i.'.example', range(1, AllowedEmailDomains::MAX + 1))];
+
+        $domains = AllowedEmailDomains::fromValues($stored);
+
+        self::assertCount(AllowedEmailDomains::MAX + 2, $domains->domains);
+        self::assertTrue($domains->matches('not a domain'));
+    }
+
+    public function testStoredValuesAreNormalised(): void
+    {
+        self::assertSame(['acme.com', 'acme.io'], AllowedEmailDomains::fromValues(['ACME.io', '@acme.com', 'acme.io', ''])->domains);
     }
 }

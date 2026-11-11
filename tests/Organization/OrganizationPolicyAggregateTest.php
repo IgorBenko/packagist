@@ -275,6 +275,16 @@ class OrganizationPolicyAggregateTest extends TestCase
         self::assertTrue($restored->unmetPoliciesFor(self::MEMBER)->isEmpty());
     }
 
+    public function testADomainTheCurrentRulesRefuseStillReplays(): void
+    {
+        $organization = Organization::reconstitute(new Ulid(), [
+            ...$this->bootstrapHistory(),
+            ['type' => OrganizationEventType::AllowedEmailDomainsEdited, 'payload' => ['allowedEmailDomains' => ['acme.com', 'not a domain']]],
+        ]);
+
+        self::assertSame(['acme.com', 'not a domain'], $organization->policies()->allowedEmailDomains->domains);
+    }
+
     public function testBothPoliciesInOneEditSuspendAMemberOnce(): void
     {
         $organization = $this->orgWithSecondMember();

@@ -20,6 +20,11 @@ use Composer\Pcre\Preg;
  *
  * Normalised on construction (lowercased, `@` stripped, deduplicated, sorted) so {@see equals()} can decide
  * whether an edit changes anything and matching an address is a plain lookup.
+ *
+ * Stored lists must load even if a later, stricter {@see PATTERN} or {@see MAX} refuses them, or old
+ * organizations fail to load. {@see fromValues()} can only build the object through the constructor
+ * ($domains is readonly), so the constructor does not validate. Use {@see fromInput()} or {@see fromList()}
+ * for owner input, {@see fromValues()} for stored data.
  */
 final readonly class AllowedEmailDomains
 {
@@ -31,31 +36,18 @@ final readonly class AllowedEmailDomains
     /** @var list<string> */
     public array $domains;
 
-    /**
-     * @throws InvalidEmailDomainException an entry is not a domain name, or there are more than {@see MAX}
-     */
     public function __construct(string ...$domains)
     {
         $normalised = [];
         foreach ($domains as $domain) {
             $domain = mb_strtolower(ltrim(trim($domain), '@'));
-            if ($domain === '') {
-                continue;
+            if ($domain !== '') {
+                $normalised[] = $domain;
             }
-
-            if (!Preg::isMatch(self::PATTERN, $domain)) {
-                throw new InvalidEmailDomainException(sprintf('"%s" is not a valid email address domain.', $domain));
-            }
-
-            $normalised[$domain] = true;
         }
 
-        $normalised = array_keys($normalised);
+        $normalised = array_values(array_unique($normalised));
         sort($normalised);
-
-        if (\count($normalised) > self::MAX) {
-            throw new InvalidEmailDomainException(sprintf('At most %d email address domains can be required.', self::MAX));
-        }
 
         $this->domains = $normalised;
     }
@@ -66,17 +58,35 @@ final readonly class AllowedEmailDomains
     }
 
     /**
+     * @throws InvalidEmailDomainException an entry is not a domain name, or there are more than {@see MAX}
+     */
+    public static function fromInput(string ...$domains): self
+    {
+        $allowed = new self(...$domains);
+
+        foreach ($allowed->domains as $domain) {
+            if (!Preg::isMatch(self::PATTERN, $domain)) {
+                throw new InvalidEmailDomainException(sprintf('"%s" is not a valid email address domain.', $domain));
+            }
+        }
+
+        if (\count($allowed->domains) > self::MAX) {
+            throw new InvalidEmailDomainException(sprintf('At most %d email address domains can be required.', self::MAX));
+        }
+
+        return $allowed;
+    }
+
+    /**
      * @throws InvalidEmailDomainException
      */
     public static function fromList(string $list): self
     {
-        return new self(...Preg::split('{[\s,;]+}', $list, -1, PREG_SPLIT_NO_EMPTY));
+        return self::fromInput(...Preg::split('{[\s,;]+}', $list, -1, PREG_SPLIT_NO_EMPTY));
     }
 
     /**
      * @param list<string> $values
-     *
-     * @throws InvalidEmailDomainException
      */
     public static function fromValues(array $values): self
     {
